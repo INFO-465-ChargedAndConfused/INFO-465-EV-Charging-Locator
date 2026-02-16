@@ -6,9 +6,10 @@
 // Production: Use your deployed backend URL
 const getApiUrl = () => {
   if (__DEV__) {
-    // iOS Simulator needs 127.0.0.1 instead of localhost
-    // For physical devices, use your machine's IP address (e.g., '192.168.1.100')
-    return 'http://127.0.0.1:3000/api';
+    // iOS Simulator cannot reach 'localhost' or '127.0.0.1' reliably
+    // Must use the actual machine IP address on the local network
+    // Your machine IP: 10.247.59.8 (from: ipconfig getifaddr en0)
+    return 'http://10.247.59.8:3000/api';
   } else {
     // In production, use your deployed backend URL
     return 'https://your-production-api.com/api';

@@ -14,6 +14,7 @@ import { LineChart } from 'react-native-chart-kit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { spacing } from '../constants/theme';
 import { Colors } from '../constants/Colors';
+import { API_BASE_URL } from '../../config/api';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -30,7 +31,8 @@ export default function GraphScreen() {
   const fetchReadings = async () => {
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:3000/api/glucose');
+      // Use API_BASE_URL which is configured with machine IP for iOS simulator
+      const response = await fetch(`${API_BASE_URL}/glucose`);
       const data = await response.json();
 
       // Handle both response formats

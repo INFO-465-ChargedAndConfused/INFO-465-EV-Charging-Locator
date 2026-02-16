@@ -18,9 +18,10 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import LogMealScreen from './src/screens/LogMealScreen';
 import LogExerciseScreen from './src/screens/LogExerciseScreen';
 import AuroraChatScreen from './src/screens/AuroraChatScreen';
-import AuroraCallScreen from './src/screens/AuroraCallScreen';
+// import AuroraCallScreen from './src/screens/AuroraCallScreen'; // Temporarily disabled - has syntax errors
 import CommunityScreen from './src/screens/CommunityScreen';
 import InsightsScreen from './src/screens/InsightsScreen';
+import PredictionsScreen from './src/screens/PredictionsScreen';
 
 // Import auth service
 import authService from './src/services/authService';
@@ -37,6 +38,7 @@ function MainTabs() {
         tabBarIcon: ({ color, size }) => {
           let iconName;
           if (route.name === 'Dashboard') iconName = 'home';
+          else if (route.name === 'Predictions') iconName = 'analytics';
           else if (route.name === 'Care Circle') iconName = 'people';
           else if (route.name === 'History') iconName = 'list';
           else if (route.name === 'Graph') iconName = 'bar-chart';
@@ -48,7 +50,7 @@ function MainTabs() {
       })}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
-      <Tab.Screen name="Care Circle" component={CommunityScreen} />
+      <Tab.Screen name="Predictions" component={PredictionsScreen} />
       <Tab.Screen name="History" component={HistoryScreen} />
       <Tab.Screen name="Graph" component={GraphScreen} />
       <Tab.Screen name="Goals" component={HealthQuestScreen} />
@@ -127,14 +129,7 @@ export default function App() {
                 presentation: 'card',
               }}
             />
-            <Stack.Screen
-              name="AuroraCall"
-              component={AuroraCallScreen}
-              options={{
-                headerShown: false,
-                presentation: 'card',
-              }}
-            />
+            {/* AuroraCallScreen temporarily removed - had syntax errors */}
             <Stack.Screen
               name="Insights"
               component={InsightsScreen}

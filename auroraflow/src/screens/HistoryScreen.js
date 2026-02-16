@@ -14,6 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { spacing } from '../constants/theme';
 import { Colors } from '../constants/Colors';
+import { API_BASE_URL } from '../../config/api';
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -23,7 +24,7 @@ export default function HistoryScreen() {
 
   const fetchReadings = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/glucose');
+      const response = await fetch('${API_BASE_URL}/glucose');
       const data = await response.json();
 
       // Handle both response formats
@@ -57,7 +58,7 @@ export default function HistoryScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              const response = await fetch(`http://localhost:3000/api/glucose/${id}`, {
+              const response = await fetch(`${API_BASE_URL}/glucose/${id}`, {
                 method: 'DELETE',
               });
               if (response.ok) {
