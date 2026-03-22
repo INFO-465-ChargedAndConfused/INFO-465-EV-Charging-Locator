@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RangeReady – EV Charging Locator</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     /* ── Reset ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -892,6 +893,70 @@
       transition: background .18s;
     }
     .btn-white:hover { background: rgba(255,255,255,.30); }
+
+    /* ════════════════════════════════════════
+       MAP (Nearby Chargers screen)
+    ════════════════════════════════════════ */
+    #map {
+      height: 280px;
+      width: 100%;
+      flex-shrink: 0;
+      z-index: 1;
+      border-bottom: 1px solid var(--gray-200);
+    }
+    /* Override screen scroll so map stays fixed, list scrolls */
+    #s-nearby { overflow: hidden; }
+    .charger-list { overflow-y: auto; }
+
+    /* Leaflet popup styling */
+    .leaflet-popup-content {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 12px 14px;
+    }
+    .leaflet-popup-content .rr-popup-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 2px;
+    }
+    .leaflet-popup-content .rr-popup-loc { color: #64748b; margin-bottom: 6px; }
+    .leaflet-popup-content .rr-popup-chips {
+      display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px;
+    }
+    .leaflet-popup-content .rr-chip {
+      padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;
+    }
+    .leaflet-popup-content .rr-chip-blue { background: #dbeafe; color: #1e40af; }
+    .leaflet-popup-content .rr-chip-gray { background: #f1f5f9; color: #475569; }
+    .leaflet-popup-content .rr-popup-row { margin-bottom: 2px; }
+    .leaflet-popup-content .rr-popup-status-ok  { color: #16a34a; font-weight: 600; }
+    .leaflet-popup-content .rr-popup-status-lim { color: #d97706; font-weight: 600; }
+    .leaflet-popup-content .rr-popup-status-no  { color: #dc2626; font-weight: 600; }
+    .leaflet-popup-content .rr-popup-btn {
+      display: block; width: 100%; margin-top: 10px;
+      padding: 8px 14px;
+      background: #1e40af; color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: inherit; text-align: center;
+      transition: background .15s;
+    }
+    .leaflet-popup-content .rr-popup-btn:hover { background: #2563eb; }
+    .map-legend {
+      display: flex; gap: 14px; padding: 7px 18px;
+      background: var(--white); border-bottom: 1px solid var(--gray-200);
+      font-size: 12px; color: var(--gray-600); flex-shrink: 0;
+    }
+    .map-legend-item { display: flex; align-items: center; gap: 5px; }
+    .legend-dot {
+      width: 11px; height: 11px; border-radius: 50%;
+      border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.15);
+      flex-shrink: 0;
+    }
+    .legend-dot-blue  { background: #1e40af; }
+    .legend-dot-green { background: #16a34a; }
   </style>
 </head>
 <body>
@@ -1049,13 +1114,24 @@
       <div class="screen-title">Nearby Chargers</div>
     </div>
     <div class="filter-bar">
-      <button class="chip on" data-filter="all"       onclick="filterChargers(this,'all')">🔍 All (6)</button>
-      <button class="chip"    data-filter="available" onclick="filterChargers(this,'available')">✅ Available</button>
-      <button class="chip"    data-filter="free"      onclick="filterChargers(this,'free')">💰 Free</button>
-      <button class="chip"    data-filter="fast"      onclick="filterChargers(this,'fast')">⚡ DC Fast</button>
-      <button class="chip"    data-filter="close"     onclick="filterChargers(this,'close')">📍 Under 3 mi</button>
+      <button class="chip on" data-filter="all"    onclick="applyFilters('all',this)">🔍 All</button>
+      <button class="chip"    data-filter="fast"   onclick="applyFilters('fast',this)">⚡ DC Fast</button>
+      <button class="chip"    data-filter="level2" onclick="applyFilters('level2',this)">🔌 Level 2</button>
+      <button class="chip"    data-filter="free"   onclick="applyFilters('free',this)">💰 Free</button>
     </div>
-    <div class="charger-list" id="charger-list"></div>
+    <!-- Interactive Leaflet map — tiles from OpenStreetMap, markers from stations-va.json -->
+    <div id="map"></div>
+    <div class="map-legend">
+      <div class="map-legend-item"><div class="legend-dot legend-dot-blue"></div> DC Fast</div>
+      <div class="map-legend-item"><div class="legend-dot legend-dot-green"></div> Level 2</div>
+    </div>
+    <div class="charger-list" id="charger-list">
+      <div class="empty-state">
+        <div class="empty-icon">📍</div>
+        <div class="empty-title">Loading chargers…</div>
+        <div class="empty-desc">Visit this screen to load the map</div>
+      </div>
+    </div>
   </div>
 
   <!-- ══════════════════════════════════════
@@ -1400,6 +1476,7 @@
 
 <div id="toasts"></div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 /* ══════════════════════════════════════════════
    DATA
@@ -1494,6 +1571,12 @@ function go(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = document.getElementById(id);
   if (el) { el.classList.add('active'); el.scrollTop = 0; }
+
+  // Leaflet is initialized on DOMContentLoaded (not here).
+  // invalidateSize() fixes tile rendering after the screen was hidden.
+  if (id === 's-nearby' && map) {
+    map.invalidateSize();
+  }
 }
 
 /* ══════════════════════════════════════════════
@@ -1743,6 +1826,291 @@ function saveSession() {
 }
 
 /* ══════════════════════════════════════════════
+   MAP – STATE
+   stationsData: full dataset from stations-va.json
+   activeLayerGroup: Leaflet layer group for markers (cleared on re-render)
+   // FUTURE: add batteryRange, currentLocation, routeWaypoints state here
+══════════════════════════════════════════════ */
+let map          = null;
+let stationsData = [];
+let activeLayerGroup = null;
+
+/* ══════════════════════════════════════════════
+   MAP – INIT
+   Called from DOMContentLoaded (not from go()) so Leaflet always initializes
+   against a properly laid-out container — no CSS animation timing issues.
+   The #s-nearby screen is briefly forced to display:flex / visibility:hidden
+   so Leaflet can measure the map div, then immediately restored to hidden.
+   // FUTURE: plug route optimization engine into this init block
+══════════════════════════════════════════════ */
+function initMap() {
+  const nearby = document.getElementById('s-nearby');
+
+  // Expose the container to the layout engine without showing it to the user
+  nearby.style.display    = 'flex';
+  nearby.style.visibility = 'hidden';
+
+  map = L.map('map', { center: [37.4316, -78.6569], zoom: 7 });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  activeLayerGroup = L.layerGroup().addTo(map);
+
+  // Restore hidden state — go() will show it properly when user navigates there
+  nearby.style.display    = '';
+  nearby.style.visibility = '';
+
+  loadStations();
+}
+
+/* ══════════════════════════════════════════════
+   MAP – LOAD STATIONS
+   Fetches stations-va.json and populates map + list.
+   Requires a local server or static host (fetch won't work via file://).
+   // FUTURE: swap fetch URL for real-time availability API endpoint
+══════════════════════════════════════════════ */
+function loadStations() {
+  fetch('./stations-va.json')
+    .then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(data => {
+      stationsData = data;
+      renderMarkers(stationsData);
+      renderStationList(stationsData);
+      toast('📍 Loaded ' + stationsData.length + ' stations across Virginia', 'info');
+    })
+    .catch(err => {
+      console.error('Station load error:', err);
+      document.getElementById('charger-list').innerHTML =
+        '<div class="empty-state">' +
+        '<div class="empty-icon">⚠️</div>' +
+        '<div class="empty-title">Could not load chargers</div>' +
+        '<div class="empty-desc">Serve the app via a local server or static host — fetch() requires HTTP.</div>' +
+        '</div>';
+    });
+}
+
+/* ══════════════════════════════════════════════
+   MAP – RENDER MARKERS
+   Clears the layer group and adds circle markers for the given station list.
+   Blue = DC Fast, Green = Level 2.
+   Skips any station missing lat/lng.
+   // FUTURE: add charger scoring overlay (color intensity = score rank)
+══════════════════════════════════════════════ */
+function renderMarkers(stations) {
+  if (!map || !activeLayerGroup) return;
+  activeLayerGroup.clearLayers();
+  if (!stations.length) return;
+
+  stations.forEach(station => {
+    const lat = parseFloat(station.lat);
+    const lng = parseFloat(station.lng);
+    if (isNaN(lat) || isNaN(lng)) return; // skip invalid coords
+
+    const color = station.charger_type === 'DC Fast' ? '#1e40af' : '#16a34a';
+
+    const marker = L.circleMarker([lat, lng], {
+      radius: 9,
+      fillColor: color,
+      color: '#ffffff',
+      weight: 2.5,
+      opacity: 1,
+      fillOpacity: 0.9
+    });
+
+    marker.bindPopup(createPopupContent(station), { maxWidth: 260, minWidth: 200 });
+    activeLayerGroup.addLayer(marker);
+  });
+}
+
+/* ══════════════════════════════════════════════
+   MAP – CREATE POPUP CONTENT
+   Returns an HTML string for a marker popup.
+   The "View Details" button calls window.__rrOpenStation(id).
+══════════════════════════════════════════════ */
+function createPopupContent(station) {
+  const st = (station.status || '').toLowerCase();
+  const statusCls = st === 'available' ? 'rr-popup-status-ok'
+                  : st === 'limited'   ? 'rr-popup-status-lim'
+                  : 'rr-popup-status-no';
+  const statusText = station.status
+    ? station.status.charAt(0).toUpperCase() + station.status.slice(1)
+    : 'Status unknown';
+  const connectors = station.connectors.join(', ');
+
+  return `<div class="rr-popup-name">${station.name}</div>
+<div class="rr-popup-loc">${station.city}, ${station.state}</div>
+<div class="rr-popup-chips">
+  <span class="rr-chip rr-chip-blue">${station.charger_type}</span>
+  <span class="rr-chip rr-chip-gray">🔌 ${connectors}</span>
+</div>
+<div class="rr-popup-row">💰 ${station.pricing_display}</div>
+<div class="rr-popup-row ${statusCls}">● ${statusText}</div>
+<button class="rr-popup-btn" onclick="window.__rrOpenStation('${station.id}')">View Details →</button>`;
+}
+
+/* ══════════════════════════════════════════════
+   MAP – OPEN STATION DETAILS
+   Populates the charger detail screen (s-detail) from a JSON station object.
+   Bridges between the new map data format and the existing detail screen UI.
+══════════════════════════════════════════════ */
+function openStationDetails(station) {
+  const isFree   = station.pricing === null ||
+                   (station.pricing_display || '').toLowerCase().includes('free');
+  const priceNum = parseFloat(station.pricing) || 0.36;
+  const fullAddr = station.address + ', ' + station.city + ', ' + station.state;
+
+  // Store compatible object so the charging simulation still works
+  currentCharger = {
+    name:  station.name,
+    loc:   station.city + ', ' + station.state,
+    addr:  fullAddr,
+    free:  isFree,
+    price: priceNum,
+    type:  station.charger_type,
+    speed: station.charger_type === 'DC Fast' ? 150 : 7.2,
+    avail: station.status || 'unknown',
+    net:   station.network,
+    conn:  station.connectors.join(' / '),
+    ports: buildPortsArray(station),
+    time:  station.charger_type === 'DC Fast' ? '~25 min' : '~4–6 hrs'
+  };
+  detailSource = 'nearby';
+
+  // Populate detail screen
+  document.getElementById('d-name').textContent  = station.name;
+  document.getElementById('d-addr').textContent  = fullAddr;
+  document.getElementById('d-dist').textContent  = '–';
+  document.getElementById('d-price').textContent = station.pricing_display;
+  document.getElementById('d-speed').textContent = (station.charger_type === 'DC Fast' ? '150' : '7.2') + ' kW';
+  document.getElementById('d-time').textContent  = station.charger_type === 'DC Fast' ? '~25 min' : '~4–6 hrs';
+  document.getElementById('d-net').textContent   = station.network;
+  document.getElementById('d-conn').textContent  = station.connectors.join(' / ');
+
+  // Status badge
+  const b  = document.getElementById('d-badge');
+  b.className = 'badge';
+  const st = (station.status || '').toLowerCase();
+  if      (st === 'available') { b.classList.add('badge-ok');  b.textContent = '● Available'; }
+  else if (st === 'limited')   { b.classList.add('badge-lim'); b.textContent = '◑ Limited'; }
+  else                         { b.classList.add('badge-no');  b.textContent = '○ Status Unknown'; }
+
+  // Cost estimate (assumes 60 kWh usable battery, 0–80% charge)
+  document.getElementById('d-cost80').textContent = isFree
+    ? 'FREE' : '~$' + (60 * 0.8 * priceNum).toFixed(2);
+
+  // Port availability grid
+  const ports   = buildPortsArray(station);
+  const portMap = { ok: ['⚡','Open'], lim: ['⏳','Soon'], no: ['✕','In Use'] };
+  document.getElementById('d-ports').innerHTML = ports
+    .map(p => `<div class="port ${p}"><span>${portMap[p][0]}</span><span class="plbl">${portMap[p][1]}</span></div>`)
+    .join('');
+
+  document.getElementById('ch-station').textContent = station.name + ' – ' + station.city;
+  go('s-detail');
+}
+
+// Derive a ports array from station status + connector count for the port grid
+function buildPortsArray(station) {
+  const st    = (station.status || 'available').toLowerCase();
+  const count = Math.min(station.connectors.length * 2, 8);
+  return Array.from({ length: count }, (_, i) => {
+    if (st === 'available') return i < count - 1 ? 'ok' : 'lim';
+    if (st === 'limited')   return i % 2 === 0 ? 'ok' : 'lim';
+    return 'no';
+  });
+}
+
+// Global handler called by popup "View Details" buttons
+window.__rrOpenStation = function(id) {
+  const station = stationsData.find(s => s.id === id);
+  if (station) openStationDetails(station);
+};
+
+/* ══════════════════════════════════════════════
+   MAP – APPLY FILTERS
+   Filters stationsData by charger type or pricing and re-renders map + list.
+   // FUTURE: add battery-range-aware filtering (only show reachable stations)
+   // FUTURE: add real-time availability filter via API
+══════════════════════════════════════════════ */
+function applyFilters(type, btn) {
+  document.querySelectorAll('#s-nearby .chip').forEach(c => c.classList.remove('on'));
+  if (btn) {
+    btn.classList.add('on');
+  } else {
+    const chip = document.querySelector(`#s-nearby [data-filter="${type}"]`);
+    if (chip) chip.classList.add('on');
+  }
+
+  let filtered;
+  switch (type) {
+    case 'fast':
+      filtered = stationsData.filter(s => s.charger_type === 'DC Fast'); break;
+    case 'level2':
+      filtered = stationsData.filter(s => s.charger_type === 'Level 2'); break;
+    case 'free':
+      filtered = stationsData.filter(s =>
+        s.pricing === null || (s.pricing_display || '').toLowerCase().includes('free')); break;
+    default:
+      filtered = stationsData;
+  }
+
+  renderMarkers(filtered);
+  renderStationList(filtered);
+  toast('🔍 Showing ' + filtered.length + ' charger' + (filtered.length !== 1 ? 's' : ''), 'info');
+}
+
+/* ══════════════════════════════════════════════
+   MAP – RENDER STATION LIST
+   Renders scrollable station cards below the map from JSON station objects.
+══════════════════════════════════════════════ */
+function renderStationList(stations) {
+  const el = document.getElementById('charger-list');
+  if (!stations.length) {
+    el.innerHTML =
+      '<div class="empty-state">' +
+      '<div class="empty-icon">🔍</div>' +
+      '<div class="empty-title">No chargers found</div>' +
+      '<div class="empty-desc">Try a different filter to see more options</div>' +
+      '</div>';
+    return;
+  }
+  el.innerHTML = stations.map(s => {
+    const st   = (s.status || 'unknown').toLowerCase();
+    const bc   = st === 'available' ? 'badge-ok' : st === 'limited' ? 'badge-lim' : 'badge-no';
+    const bt   = st === 'available' ? '● Available' : st === 'limited' ? '◑ Limited' : '○ Unknown';
+    const isFree = s.pricing === null ||
+                   (s.pricing_display || '').toLowerCase().includes('free');
+    const pt   = isFree
+      ? '<span style="color:var(--green);font-weight:700;">FREE</span>'
+      : s.pricing_display;
+    return `<div class="charger-card" onclick="window.__rrOpenStation('${s.id}')">
+      <div class="cc-top">
+        <div>
+          <div class="cc-name">${s.name}</div>
+          <div class="cc-loc">${s.city}, ${s.state}</div>
+          <div class="cc-addr">${s.address}</div>
+        </div>
+        <span class="badge ${bc}">${bt}</span>
+      </div>
+      <div class="cc-bottom">
+        <div class="cc-meta">
+          <div class="cc-meta-item">💰 ${pt}</div>
+          <div class="cc-meta-item">⚡ ${s.charger_type}</div>
+          <div class="cc-meta-item">📡 ${s.network}</div>
+        </div>
+        <span class="cc-arrow">›</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ══════════════════════════════════════════════
    TOAST
 ══════════════════════════════════════════════ */
 function toast(msg, type = 'info') {
@@ -1761,8 +2129,11 @@ function toast(msg, type = 'info') {
    INIT
 ══════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
-  // Render charger list immediately (even while launch screen shows)
-  renderList(CHARGERS);
+  // Initialize Leaflet immediately while the page is loading.
+  // #s-nearby is briefly forced to display:flex/visibility:hidden inside initMap()
+  // so Leaflet can measure the container — then restored to hidden.
+  // This avoids all CSS animation timing issues.
+  initMap();
 
   // Pre-fill profile form if returning user
   const u = getUser();
