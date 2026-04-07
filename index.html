@@ -1842,11 +1842,21 @@ function fmtDuration(secs) {
 /* ── Initialise the route-preview Leaflet map (once) ── */
 function initRouteMap() {
   if (routeMap) return;
-  const el = document.getElementById('route-map');
-  el.style.display = 'block';
+  // Mirror the same trick used for the nearby map: briefly force the
+  // screen to display:flex/visibility:hidden so Leaflet can measure
+  // the container, then restore it.
+  const rp = document.getElementById('s-routepreview');
+  const prevDisplay    = rp.style.display;
+  const prevVisibility = rp.style.visibility;
+  rp.style.display    = 'flex';
+  rp.style.visibility = 'hidden';
+
   routeMap   = L.map('route-map', { zoomControl: false, attributionControl: false });
   routeLayer = L.layerGroup().addTo(routeMap);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(routeMap);
+
+  rp.style.display    = prevDisplay;
+  rp.style.visibility = prevVisibility;
 }
 
 /* ── Draw the route polyline + markers on the route map ── */
