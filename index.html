@@ -520,6 +520,11 @@
        SCREEN 7 – ROUTE PREVIEW
     ════════════════════════════════════════ */
     #s-routepreview { background: var(--gray-50); }
+    #route-map .leaflet-container { border-radius: 12px; }
+    .rp-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:40px 0; color:var(--gray-500); font-size:15px; }
+    .rp-spinner { width:36px; height:36px; border:4px solid var(--blue-pale); border-top-color:var(--blue-mid); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .no-stop-notice { background:var(--green-light); border:1px solid #86efac; border-radius:var(--r-md); padding:14px 16px; margin-bottom:14px; font-size:14px; color:#15803d; font-weight:600; }
     .route-stats-bar {
       background: linear-gradient(135deg, var(--blue-dark), var(--blue-light));
       padding: 22px 20px;
@@ -1200,69 +1205,19 @@
       <div class="screen-title">Your Route</div>
     </div>
     <div class="route-stats-bar">
-      <div class="rs"><div class="val">186 mi</div><div class="lbl">Total Distance</div></div>
-      <div class="rs"><div class="val">3h 12m</div><div class="lbl">Est. Travel Time</div></div>
-      <div class="rs"><div class="val">1 Stop</div><div class="lbl">Charging Stops</div></div>
+      <div class="rs"><div class="val" id="rp-dist">–</div><div class="lbl">Total Distance</div></div>
+      <div class="rs"><div class="val" id="rp-time">–</div><div class="lbl">Est. Travel Time</div></div>
+      <div class="rs"><div class="val" id="rp-stops">–</div><div class="lbl">Charging Stops</div></div>
     </div>
     <div class="route-stops-body">
+      <div id="route-map" style="height:190px;border-radius:12px;margin-bottom:14px;overflow:hidden;flex-shrink:0;"></div>
       <div class="section-label">Route Overview</div>
-
-      <!-- Origin -->
-      <div class="stop-row">
-        <div class="stop-spine">
-          <div class="stop-dot origin"></div>
-          <div class="stop-line-seg"></div>
-        </div>
-        <div class="stop-content">
-          <h3>Richmond, VA</h3>
-          <p>Starting point · 75% battery</p>
-        </div>
-      </div>
-
-      <!-- Charging stop -->
-      <div class="stop-row">
-        <div class="stop-spine">
-          <div class="stop-dot charge"></div>
-          <div class="stop-line-seg"></div>
-        </div>
-        <div class="stop-content">
-          <h3>⚡ Charging Stop</h3>
-          <p>Electrify America · I-64 E, Charlottesville</p>
-          <div class="charge-info-box">
-            <div class="charge-info-row">
-              <span>🕒 ~28 min charge</span>
-              <span>💰 ~$8.40</span>
-            </div>
-            <div class="charge-info-sub">Arriving at 18% → Charge to 80%</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Destination -->
-      <div class="stop-row">
-        <div class="stop-spine">
-          <div class="stop-dot dest"></div>
-        </div>
-        <div class="stop-content">
-          <h3 id="rp-dest">Washington, D.C.</h3>
-          <p>Destination · Arriving with ~42% battery</p>
-        </div>
-      </div>
-
+      <div id="rp-stop-list"></div>
       <hr class="divider" />
-
-      <div class="savings-card">
-        <span style="font-size:22px;flex-shrink:0;">💡</span>
-        <div>
-          <div style="font-weight:700;color:#15803d;margin-bottom:3px;">Cost Estimate</div>
-          <div class="val-row">Electricity: ~$8.40 &nbsp;·&nbsp; Est. savings vs. gas: $18.60</div>
-        </div>
+      <div id="rp-cost-card"></div>
+      <div id="rp-action-btns">
+        <button class="btn btn-secondary" onclick="go('s-route')">← Modify Route</button>
       </div>
-
-      <button class="btn btn-primary" onclick="viewCharger(1,'route')" style="margin-bottom:12px;">
-        ⚡ View Charging Stop Details
-      </button>
-      <button class="btn btn-secondary" onclick="go('s-route')">← Modify Route</button>
       <div style="height:16px;"></div>
     </div>
   </div>
@@ -1729,14 +1684,375 @@ function checkAvail() {
 }
 
 /* ══════════════════════════════════════════════
-   ROUTE PLANNING
+   ROUTE PLANNING – STATE
 ══════════════════════════════════════════════ */
-function planRoute() {
-  const dest = document.getElementById('r-end').value.trim();
-  if (!dest) { toast('⚠️ Please enter a destination','warn'); document.getElementById('r-end').focus(); return; }
-  document.getElementById('rp-dest').textContent = dest;
-  toast('🗺️ Planning your route…','info');
-  setTimeout(() => { go('s-routepreview'); toast('✅ Route found with 1 charging stop!','success'); }, 900);
+let routeMap        = null;   // Leaflet map instance for route preview
+let routeLayer      = null;   // Leaflet layer group (polyline + markers)
+let routeStopData   = null;   // Selected charging stop station object (or null)
+
+/* ══════════════════════════════════════════════
+   EV PROFILES
+   Max range (miles) and compatible connector types per model.
+   Used for battery depletion math and charger filtering.
+══════════════════════════════════════════════ */
+const EV_PROFILES = {
+  'Tesla Model 3':       { range: 300, connectors: ['NACS','CCS','CHAdeMO'] },
+  'Tesla Model Y':       { range: 330, connectors: ['NACS','CCS','CHAdeMO'] },
+  'Chevrolet Bolt EV':   { range: 259, connectors: ['CCS','J1772'] },
+  'Ford Mustang Mach-E': { range: 312, connectors: ['CCS','J1772'] },
+  'Nissan LEAF':         { range: 149, connectors: ['CHAdeMO','J1772'] },
+  'Hyundai IONIQ 6':     { range: 361, connectors: ['CCS','J1772'] },
+  'Volkswagen ID.4':     { range: 275, connectors: ['CCS','J1772'] },
+  'BMW i4':              { range: 301, connectors: ['CCS','J1772'] },
+  'Rivian R1T':          { range: 328, connectors: ['CCS','J1772'] },
+  'Kia EV6':             { range: 310, connectors: ['CCS','J1772'] },
+  'Other EV':            { range: 200, connectors: ['CCS','J1772','CHAdeMO'] },
+};
+
+/* ── Geocode an address string using Nominatim ── */
+async function geocodeAddress(query) {
+  const url = 'https://nominatim.openstreetmap.org/search?'
+    + new URLSearchParams({ q: query + ', Virginia, USA', format: 'json', limit: 1, 'accept-language': 'en' });
+  const res  = await fetch(url, { headers: { 'User-Agent': 'RangeReady/1.0' } });
+  const data = await res.json();
+  if (!data.length) {
+    // Retry without the Virginia constraint (user may be routing to D.C., W.Va., etc.)
+    const url2 = 'https://nominatim.openstreetmap.org/search?'
+      + new URLSearchParams({ q: query + ', USA', format: 'json', limit: 1, 'accept-language': 'en' });
+    const res2  = await fetch(url2, { headers: { 'User-Agent': 'RangeReady/1.0' } });
+    const data2 = await res2.json();
+    if (!data2.length) throw new Error('Could not find: ' + query);
+    return { lat: parseFloat(data2[0].lat), lng: parseFloat(data2[0].lon), label: data2[0].display_name.split(',').slice(0,2).join(',') };
+  }
+  return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), label: data[0].display_name.split(',').slice(0,2).join(',') };
+}
+
+/* ── Fetch a driving route from OSRM ── */
+async function fetchOSRMRoute(startLat, startLng, endLat, endLng) {
+  const path = `${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
+  const endpoints = [
+    `https://routing.openstreetmap.de/routed-car/route/v1/driving/${path}`,
+    `https://router.project-osrm.org/route/v1/driving/${path}`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const res  = await fetch(url);
+      const data = await res.json();
+      if (data.code === 'Ok' && data.routes.length) {
+        return {
+          distanceM: data.routes[0].distance,
+          durationS: data.routes[0].duration,
+          coords:    data.routes[0].geometry.coordinates,
+        };
+      }
+    } catch (e) { /* try next */ }
+  }
+  throw new Error('Could not calculate route. Please try again.');
+}
+
+/* ── Haversine distance between two lat/lng points → metres ── */
+function haversineM(lat1, lng1, lat2, lng2) {
+  const R  = 6371000;
+  const d1 = (lat2 - lat1) * Math.PI / 180;
+  const d2 = (lng2 - lng1) * Math.PI / 180;
+  const a  = Math.sin(d1/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(d2/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/* ── Minimum distance from a point to a polyline segment → metres ── */
+function pointToSegmentM(pLat, pLng, aLat, aLng, bLat, bLng) {
+  const dx = bLat - aLat, dy = bLng - aLng;
+  if (dx === 0 && dy === 0) return haversineM(pLat, pLng, aLat, aLng);
+  const t = Math.max(0, Math.min(1, ((pLat - aLat)*dx + (pLng - aLng)*dy) / (dx*dx + dy*dy)));
+  return haversineM(pLat, pLng, aLat + t*dx, aLng + t*dy);
+}
+
+/* ── Cumulative distance along the route to each coordinate point ── */
+function buildCumDist(coords) {
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) {
+    cum.push(cum[i-1] + haversineM(coords[i-1][1], coords[i-1][0], coords[i][1], coords[i][0]));
+  }
+  return cum;
+}
+
+/* ── Find stations within maxDistM metres of the route polyline ── */
+function stationsAlongRoute(coords, maxDistM) {
+  return stationsData.filter(s => {
+    const lat = parseFloat(s.lat), lng = parseFloat(s.lng);
+    for (let i = 0; i < coords.length - 1; i++) {
+      if (pointToSegmentM(lat, lng, coords[i][1], coords[i][0], coords[i+1][1], coords[i+1][0]) <= maxDistM) return true;
+    }
+    return false;
+  });
+}
+
+/* ══════════════════════════════════════════════
+   BATTERY DEPLETION + CHARGING STOP LOGIC
+   Returns the best charging stop object (or null if no stop needed).
+   - evRangeMi: full range of the EV in miles
+   - battPct:   current battery % (0–100)
+   - routeDistMi: total route distance in miles
+   - nearbyStations: stations already filtered along the route
+   - cumDistM: cumulative distance array (metres) for each coord
+   - coords: route coordinates [[lng,lat],...]
+══════════════════════════════════════════════ */
+function findBestChargingStop(evRangeMi, battPct, routeDistMi, nearbyStations, cumDistM, coords) {
+  const totalRangeM    = evRangeMi * 1609.34;
+  const currentRangeM  = totalRangeM * (battPct / 100);
+  const safeReserveM   = totalRangeM * 0.15;       // keep ≥15% in the tank
+  const usableRangeM   = currentRangeM - safeReserveM;
+  const routeDistM     = routeDistMi * 1609.34;
+
+  // Can we make it without stopping?
+  if (usableRangeM >= routeDistM) return null;
+
+  // Ideal stop point: where we'd hit ~20% battery
+  const idealStopM = usableRangeM;
+
+  // Score each along-route station by proximity to the ideal stop point
+  // and penalise stations that are unreachable (beyond usable range)
+  let best = null, bestScore = Infinity;
+
+  nearbyStations.forEach(s => {
+    const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
+    // Find closest cumulative distance on route to this station
+    let minDist = Infinity, closestCum = 0;
+    for (let i = 0; i < coords.length - 1; i++) {
+      const d = pointToSegmentM(sLat, sLng, coords[i][1], coords[i][0], coords[i+1][1], coords[i+1][0]);
+      if (d < minDist) { minDist = d; closestCum = (cumDistM[i] + cumDistM[i+1]) / 2; }
+    }
+    // Station must be reachable on current charge and leave enough to reach destination after charging to 80%
+    if (closestCum > usableRangeM) return;                        // can't reach it
+    const remainAfterCharge = totalRangeM * 0.80;
+    if ((routeDistM - closestCum) > remainAfterCharge) return;    // can't finish even after charging
+    const score = Math.abs(closestCum - idealStopM) + minDist;
+    if (score < bestScore) { bestScore = score; best = { station: s, routeDistM: closestCum }; }
+  });
+
+  return best;
+}
+
+/* ── Format seconds → "Xh Ym" or "Y min" ── */
+function fmtDuration(secs) {
+  const h = Math.floor(secs / 3600), m = Math.round((secs % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m} min`;
+}
+
+/* ── Initialise the route-preview Leaflet map (once) ── */
+function initRouteMap() {
+  if (routeMap) return;
+  const el = document.getElementById('route-map');
+  el.style.display = 'block';
+  routeMap   = L.map('route-map', { zoomControl: false, attributionControl: false });
+  routeLayer = L.layerGroup().addTo(routeMap);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(routeMap);
+}
+
+/* ── Draw the route polyline + markers on the route map ── */
+function drawRouteOnMap(coords, startPt, endPt, stopStation) {
+  initRouteMap();
+  routeLayer.clearLayers();
+
+  // Polyline — convert OSRM [lng,lat] → Leaflet [lat,lng]
+  const latLngs = coords.map(c => [c[1], c[0]]);
+  L.polyline(latLngs, { color: '#2563eb', weight: 5, opacity: 0.85 }).addTo(routeLayer);
+
+  // Start marker
+  L.circleMarker([startPt.lat, startPt.lng], { radius:9, fillColor:'#16a34a', color:'#fff', weight:2.5, fillOpacity:1 })
+    .bindPopup(`<b>Start</b><br>${startPt.label}`).addTo(routeLayer);
+
+  // End marker
+  L.circleMarker([endPt.lat, endPt.lng], { radius:9, fillColor:'#dc2626', color:'#fff', weight:2.5, fillOpacity:1 })
+    .bindPopup(`<b>Destination</b><br>${endPt.label}`).addTo(routeLayer);
+
+  // Charging stop marker
+  if (stopStation) {
+    const s = stopStation.station;
+    L.circleMarker([parseFloat(s.lat), parseFloat(s.lng)], { radius:11, fillColor:'#d97706', color:'#fff', weight:2.5, fillOpacity:1 })
+      .bindPopup(`<b>⚡ ${s.name}</b><br>${s.city}, ${s.state}`).addTo(routeLayer);
+  }
+
+  routeMap.fitBounds(latLngs, { padding: [20, 20] });
+  setTimeout(() => routeMap.invalidateSize(), 50);
+}
+
+/* ── Build the dynamic stop list HTML ── */
+function renderRouteStops(startLabel, endLabel, battPct, routeDistMi, stopResult, arrivalPct) {
+  let html = '';
+
+  // Origin
+  html += `<div class="stop-row">
+    <div class="stop-spine"><div class="stop-dot origin"></div><div class="stop-line-seg"></div></div>
+    <div class="stop-content"><h3>${startLabel}</h3><p>Starting point · ${battPct}% battery</p></div>
+  </div>`;
+
+  if (stopResult) {
+    const s = stopResult.station;
+    const stopDistMi = (stopResult.routeDistM / 1609.34).toFixed(0);
+    const arrAtStop  = Math.max(15, Math.round(battPct - (stopResult.routeDistM / 1609.34 / (getEVProfile().range / 100))));
+    const chargeMins = s.charger_type === 'DC Fast' ? 28 : 90;
+    const kwhAdded   = ((80 - arrAtStop) / 100 * 60).toFixed(1);
+    const isFree     = s.pricing === null || (s.pricing_display || '').toLowerCase().includes('free');
+    const stopCost   = isFree ? 'FREE' : '~$' + (parseFloat(kwhAdded) * (parseFloat(s.pricing) || 0.36)).toFixed(2);
+
+    html += `<div class="stop-row">
+      <div class="stop-spine"><div class="stop-dot charge"></div><div class="stop-line-seg"></div></div>
+      <div class="stop-content">
+        <h3>⚡ Charging Stop</h3>
+        <p>${s.name} · ${s.city}, ${s.state}</p>
+        <div class="charge-info-box">
+          <div class="charge-info-row">
+            <span>🕒 ~${chargeMins} min charge</span>
+            <span>💰 ${stopCost}</span>
+          </div>
+          <div class="charge-info-sub">Arriving at ~${arrAtStop}% → Charge to 80%</div>
+        </div>
+      </div>
+    </div>`;
+  } else {
+    html += `<div class="no-stop-notice">✅ No charging stop needed — your battery can make the full trip!</div>`;
+  }
+
+  // Destination
+  html += `<div class="stop-row">
+    <div class="stop-spine"><div class="stop-dot dest"></div></div>
+    <div class="stop-content"><h3 id="rp-dest">${endLabel}</h3><p>Destination · Arriving with ~${arrivalPct}% battery</p></div>
+  </div>`;
+
+  document.getElementById('rp-stop-list').innerHTML = html;
+}
+
+/* ── Build cost estimate card ── */
+function renderCostCard(stopResult, routeDistMi) {
+  let elecCost = 0;
+  if (stopResult) {
+    const s = stopResult.station;
+    const isFree = s.pricing === null || (s.pricing_display || '').toLowerCase().includes('free');
+    if (!isFree) {
+      const kwhAdded = 0.65 * 60 * 0.65; // approx 65% → 80%, 60kWh battery
+      elecCost = kwhAdded * (parseFloat(s.pricing) || 0.36);
+    }
+  }
+  const gasCost  = routeDistMi * 0.17; // ~$0.17/mi average gas cost
+  const savings  = Math.max(0, gasCost - elecCost).toFixed(2);
+  const elecStr  = elecCost > 0 ? '~$' + elecCost.toFixed(2) : 'FREE';
+
+  document.getElementById('rp-cost-card').innerHTML = `
+    <div class="savings-card" style="margin-bottom:14px;">
+      <span style="font-size:22px;flex-shrink:0;">💡</span>
+      <div>
+        <div style="font-weight:700;color:#15803d;margin-bottom:3px;">Cost Estimate</div>
+        <div class="val-row">Electricity: ${elecStr} &nbsp;·&nbsp; Est. savings vs. gas: $${savings}</div>
+      </div>
+    </div>`;
+}
+
+/* ── Get current user's EV profile ── */
+function getEVProfile() {
+  const u  = getUser();
+  const ev = u && u.ev ? u.ev : 'Other EV';
+  return EV_PROFILES[ev] || EV_PROFILES['Other EV'];
+}
+
+/* ══════════════════════════════════════════════
+   ROUTE PLANNING – MAIN ENTRY POINT
+══════════════════════════════════════════════ */
+async function planRoute() {
+  const startVal = document.getElementById('r-start').value.trim();
+  const endVal   = document.getElementById('r-end').value.trim();
+  const battPct  = parseInt(document.getElementById('batt-slider').value, 10);
+
+  if (!startVal) { toast('⚠️ Please enter a starting point','warn'); document.getElementById('r-start').focus(); return; }
+  if (!endVal)   { toast('⚠️ Please enter a destination','warn');     document.getElementById('r-end').focus();   return; }
+
+  // Show routepreview with loading state immediately
+  document.getElementById('rp-dist').textContent  = '…';
+  document.getElementById('rp-time').textContent  = '…';
+  document.getElementById('rp-stops').textContent = '…';
+  document.getElementById('rp-stop-list').innerHTML  = '<div class="rp-loading"><div class="rp-spinner"></div>Planning your route…</div>';
+  document.getElementById('rp-cost-card').innerHTML  = '';
+  document.getElementById('rp-action-btns').innerHTML = '<button class="btn btn-secondary" onclick="go(\'s-route\')">← Modify Route</button>';
+  go('s-routepreview');
+
+  try {
+    toast('📍 Finding locations…','info');
+    const [startPt, endPt] = await Promise.all([
+      geocodeAddress(startVal),
+      geocodeAddress(endVal),
+    ]);
+
+    toast('🗺️ Calculating route…','info');
+    const route = await fetchOSRMRoute(startPt.lat, startPt.lng, endPt.lat, endPt.lng);
+
+    const distMi     = route.distanceM / 1609.34;
+    const evProfile  = getEVProfile();
+    const cumDistM   = buildCumDist(route.coords);
+
+    // Filter chargers along the route (within 1 mile = 1609 m)
+    const nearbyStations = stationsAlongRoute(route.coords, 1609);
+
+    // Filter by connector compatibility and availability (exclude unavailable stations)
+    const compatible = nearbyStations.filter(s =>
+      s.connectors.some(c => evProfile.connectors.includes(c)) &&
+      (s.status || '').toLowerCase() !== 'unavailable'
+    );
+
+    // Find best charging stop using battery logic
+    const stopResult = findBestChargingStop(evProfile.range, battPct, distMi, compatible, cumDistM, route.coords);
+    routeStopData = stopResult ? stopResult.station : null;
+
+    // Calculate arrival battery %
+    const totalRangeMi   = evProfile.range;
+    let arrivalPct;
+    if (stopResult) {
+      const stopDistMi  = stopResult.routeDistM / 1609.34;
+      const remDistMi   = distMi - stopDistMi;
+      arrivalPct = Math.round(80 - (remDistMi / totalRangeMi * 100));
+    } else {
+      arrivalPct = Math.round(battPct - (distMi / totalRangeMi * 100));
+    }
+    arrivalPct = Math.max(5, Math.min(arrivalPct, 99));
+
+    // Update stats bar
+    document.getElementById('rp-dist').textContent  = Math.round(distMi) + ' mi';
+    document.getElementById('rp-time').textContent  = fmtDuration(route.durationS);
+    document.getElementById('rp-stops').textContent = stopResult ? '1 Stop' : 'No Stop';
+
+    // Draw route on map
+    drawRouteOnMap(route.coords, startPt, endPt, stopResult);
+
+    // Render stop list
+    renderRouteStops(startPt.label, endPt.label, battPct, distMi, stopResult, arrivalPct);
+
+    // Render cost card
+    renderCostCard(stopResult, distMi);
+
+    // Render action buttons
+    let btnsHTML = '';
+    if (routeStopData) {
+      btnsHTML += `<button class="btn btn-primary" onclick="openStopDetails()" style="margin-bottom:12px;">⚡ View Charging Stop Details</button>`;
+    }
+    btnsHTML += `<button class="btn btn-secondary" onclick="go('s-route')">← Modify Route</button>`;
+    document.getElementById('rp-action-btns').innerHTML = btnsHTML;
+
+    const stopMsg = stopResult
+      ? `✅ Route planned — 1 charging stop at ${stopResult.station.name}`
+      : '✅ Route planned — no charging stop needed!';
+    toast(stopMsg, 'success');
+
+  } catch (err) {
+    document.getElementById('rp-stop-list').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Could not plan route</div><div class="empty-desc">${err.message}</div></div>`;
+    toast('⚠️ ' + err.message, 'warn');
+  }
+}
+
+/* ── Open the selected charging stop's detail screen from route preview ── */
+function openStopDetails() {
+  if (!routeStopData) return;
+  openStationDetails(routeStopData);
+  detailSource = 'route'; // override after openStationDetails resets it to 'nearby'
 }
 
 /* ══════════════════════════════════════════════
