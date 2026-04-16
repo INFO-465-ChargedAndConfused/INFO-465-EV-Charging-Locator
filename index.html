@@ -1357,13 +1357,16 @@
       <div id="nav-leaflet-map"></div>
     </div>
     <div class="nav-panel">
-      <div class="nav-instruction">
-        <div class="nav-icon">⚡</div>
-        <div>
-          <div class="nav-main" id="nav-heading">Heading to charging stop</div>
-          <div class="nav-sub" id="nav-subheading">Follow the route on the map</div>
+      <div class="nav-step-counter" id="nav-step-counter" style="font-size:12px;color:var(--gray-500);text-align:right;padding:0 2px 6px;"></div>
+      <div class="nav-instruction" id="nav-instruction-box" onclick="navNextStep()" style="cursor:pointer;">
+        <div class="nav-icon" id="nav-icon">🧭</div>
+        <div style="flex:1;">
+          <div class="nav-main" id="nav-heading">Loading directions…</div>
+          <div class="nav-sub" id="nav-subheading">Tap to advance to next step</div>
         </div>
+        <div style="font-size:22px;color:rgba(255,255,255,.5);">›</div>
       </div>
+      <div id="nav-next-preview" style="font-size:13px;color:var(--gray-500);padding:4px 2px 8px;min-height:20px;"></div>
       <div class="nav-stats-row">
         <div class="nav-stat"><div class="val" id="nav-dist">–</div><div class="lbl">Distance</div></div>
         <div class="nav-stat"><div class="val" id="nav-time">–</div><div class="lbl">Est. Time</div></div>
@@ -1833,7 +1836,7 @@ async function fetchORSRoute(startLat, startLng, endLat, endLng) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': ORS_API_KEY, 'Content-Type': 'application/json', 'Accept': 'application/json, application/geo+json' },
-      body: JSON.stringify({ coordinates: [[sLng, sLat], [eLng, eLat]], instructions: false })
+      body: JSON.stringify({ coordinates: [[sLng, sLat], [eLng, eLat]], instructions: true, language: 'en' })
     });
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
@@ -1843,7 +1846,8 @@ async function fetchORSRoute(startLat, startLng, endLat, endLng) {
     const feat = data.features && data.features[0];
     if (!feat) throw new Error('No route returned by ORS.');
     const summary = feat.properties.summary;
-    return { distanceM: summary.distance, durationS: summary.duration, coords: feat.geometry.coordinates };
+    const steps = (feat.properties.segments || []).flatMap(seg => seg.steps || []);
+    return { distanceM: summary.distance, durationS: summary.duration, coords: feat.geometry.coordinates, steps };
   }
 
   try {
@@ -2179,6 +2183,7 @@ async function planRoute() {
     document.getElementById('rp-stops').textContent = stopLabel;
 
     window._lastRouteCoords = route.coords; // save for nav map
+    window._lastRouteSteps  = route.steps || [];  // save for GPS directions
     window._lastRouteMeta = {
       distMi: route.distanceM / 1609.34,
       durationS: route.durationS,
@@ -2221,6 +2226,53 @@ function openStopDetails() {
 ══════════════════════════════════════════════ */
 let navMap = null;
 let navRoutePoly = null;
+let navSteps = [];
+let navStepIdx = 0;
+
+// ORS step type → emoji icon
+const STEP_ICONS = { 0:'↰', 1:'↱', 2:'⬅️', 3:'➡️', 4:'↖️', 5:'↗️', 6:'⬆️', 7:'🔄', 8:'🔄', 10:'🏁', 11:'🚗' };
+function stepIcon(type) { return STEP_ICONS[type] || '➡️'; }
+
+function fmtStepDist(m) {
+  if (m >= 1609) return (m / 1609.34).toFixed(1) + ' mi';
+  return Math.round(m / 10) * 10 + ' ft';
+}
+
+function renderNavStep() {
+  const step = navSteps[navStepIdx];
+  if (!step) return;
+  const total = navSteps.length;
+  document.getElementById('nav-step-counter').textContent = 'Step ' + (navStepIdx + 1) + ' of ' + total;
+  document.getElementById('nav-icon').textContent = stepIcon(step.type);
+  document.getElementById('nav-heading').textContent = step.instruction || 'Continue on route';
+  document.getElementById('nav-subheading').textContent = fmtStepDist(step.distance);
+  // Next step preview
+  const next = navSteps[navStepIdx + 1];
+  const preview = document.getElementById('nav-next-preview');
+  if (next) {
+    preview.textContent = 'Then: ' + stepIcon(next.type) + ' ' + next.instruction;
+  } else {
+    preview.textContent = '';
+  }
+  // Highlight current position on map
+  if (navMap && navRoutePoly) {
+    const coords = window._lastRouteCoords || [];
+    const wp = step.way_points;
+    if (wp && coords[wp[0]]) {
+      const pt = coords[wp[0]];
+      navMap.panTo([pt[1], pt[0]], { animate: true, duration: 0.6 });
+    }
+  }
+}
+
+function navNextStep() {
+  if (navStepIdx < navSteps.length - 1) {
+    navStepIdx++;
+    renderNavStep();
+  } else {
+    toast('🏁 You have arrived at your charging stop!', 'success');
+  }
+}
 
 function navRecenter() {
   if (!navMap) return;
@@ -2250,6 +2302,17 @@ function startNav() {
   setTimeout(() => {
     go('s-nav');
     toast('📍 Head toward ' + currentCharger.name, 'info');
+
+    // Load GPS steps
+    navSteps = window._lastRouteSteps || [];
+    navStepIdx = 0;
+    if (navSteps.length) {
+      renderNavStep();
+    } else {
+      document.getElementById('nav-heading').textContent = '⚡ ' + currentCharger.name;
+      document.getElementById('nav-subheading').textContent = currentCharger.addr;
+      document.getElementById('nav-step-counter').textContent = '';
+    }
 
     const el = document.getElementById('nav-leaflet-map');
     if (!el) return;
