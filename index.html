@@ -1358,19 +1358,20 @@
     </div>
     <div class="nav-panel">
       <div class="nav-instruction">
-        <div class="nav-icon">↗️</div>
+        <div class="nav-icon">⚡</div>
         <div>
-          <div class="nav-main">Turn right on W Broad St</div>
-          <div class="nav-sub">In 0.4 miles</div>
+          <div class="nav-main" id="nav-heading">Heading to charging stop</div>
+          <div class="nav-sub" id="nav-subheading">Follow the route on the map</div>
         </div>
       </div>
       <div class="nav-stats-row">
-        <div class="nav-stat"><div class="val">2.5 mi</div><div class="lbl">Distance</div></div>
-        <div class="nav-stat"><div class="val">8 min</div><div class="lbl">Est. Arrival</div></div>
-        <div class="nav-stat"><div class="val" style="color:var(--green)">73%</div><div class="lbl">Battery</div></div>
+        <div class="nav-stat"><div class="val" id="nav-dist">–</div><div class="lbl">Distance</div></div>
+        <div class="nav-stat"><div class="val" id="nav-time">–</div><div class="lbl">Est. Time</div></div>
+        <div class="nav-stat"><div class="val" id="nav-batt" style="color:var(--green)">–%</div><div class="lbl">Battery</div></div>
       </div>
       <div class="nav-actions">
         <button class="btn btn-success" style="flex:1;" onclick="arrive()">✅ I've Arrived</button>
+        <button class="btn btn-ghost btn-icon" title="Recenter map" onclick="navRecenter()">⊕</button>
         <button class="btn btn-ghost btn-icon" onclick="go('s-detail')">✕</button>
       </div>
     </div>
@@ -2178,6 +2179,11 @@ async function planRoute() {
     document.getElementById('rp-stops').textContent = stopLabel;
 
     window._lastRouteCoords = route.coords; // save for nav map
+    window._lastRouteMeta = {
+      distMi: route.distanceM / 1609.34,
+      durationS: route.durationS,
+      arrivalBatt: plan.stops.length ? plan.stops[0].arrivalPct : plan.finalBatt
+    };
     drawRouteOnMap(route.coords, startPt, endPt, stops);
     renderRouteStops(startPt.label, endPt.label, battPct, distMi, stops, arrivalPct, !plan.reachable);
     renderCostCard(stops, distMi);
@@ -2214,34 +2220,70 @@ function openStopDetails() {
    NAVIGATION
 ══════════════════════════════════════════════ */
 let navMap = null;
+let navRoutePoly = null;
+
+function navRecenter() {
+  if (!navMap) return;
+  if (navRoutePoly) navMap.fitBounds(navRoutePoly.getBounds(), { padding: [30, 30] });
+}
 
 function startNav() {
   if (!currentCharger) { toast('⚠️ No charger selected','warn'); return; }
   toast('🧭 Starting navigation…','info');
+
+  // Populate stats from real route data
+  const routeMeta = window._lastRouteMeta || {};
+  const distMi = routeMeta.distMi ? routeMeta.distMi.toFixed(1) + ' mi' : '–';
+  const hrs = routeMeta.durationS ? Math.floor(routeMeta.durationS / 3600) : 0;
+  const mins = routeMeta.durationS ? Math.round((routeMeta.durationS % 3600) / 60) : 0;
+  const timeStr = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + ' min';
+  const battStr = (routeMeta.arrivalBatt != null) ? Math.round(routeMeta.arrivalBatt) + '%' : '–%';
+
+  document.getElementById('nav-heading').textContent   = '⚡ ' + currentCharger.name;
+  document.getElementById('nav-subheading').textContent = currentCharger.addr;
+  document.getElementById('nav-dist').textContent       = distMi;
+  document.getElementById('nav-time').textContent       = timeStr;
+  const battEl = document.getElementById('nav-batt');
+  battEl.textContent = battStr;
+  battEl.style.color = routeMeta.arrivalBatt < 20 ? 'var(--red)' : 'var(--green)';
+
   setTimeout(() => {
     go('s-nav');
-    toast('📍 Head toward ' + currentCharger.addr,'info');
-    // Init real Leaflet map for nav screen
+    toast('📍 Head toward ' + currentCharger.name, 'info');
+
     const el = document.getElementById('nav-leaflet-map');
     if (!el) return;
-    if (navMap) { navMap.remove(); navMap = null; }
-    el.style.height = (el.parentElement.offsetHeight || 280) + 'px';
+    if (navMap) { navMap.remove(); navMap = null; navRoutePoly = null; }
+    el.style.height = (el.parentElement.offsetHeight || 300) + 'px';
+
     const destLat = currentCharger.lat || 37.4316;
     const destLng = currentCharger.lng || -78.6569;
+
     navMap = L.map('nav-leaflet-map', { zoomControl: true, attributionControl: false });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(navMap);
-    // Charger marker
-    L.circleMarker([destLat, destLng], { radius: 12, color: '#d97706', fillColor: '#f59e0b', fillOpacity: 1, weight: 3 })
-      .bindPopup('<b>⚡ ' + currentCharger.name + '</b><br>' + currentCharger.addr)
+
+    // Charger destination marker (orange)
+    L.circleMarker([destLat, destLng], { radius: 13, color: '#b45309', fillColor: '#f59e0b', fillOpacity: 1, weight: 3 })
+      .bindPopup('<b>⚡ ' + currentCharger.name + '</b><br><small>' + currentCharger.addr + '</small>')
       .addTo(navMap).openPopup();
-    // Draw route polyline if available
+
+    // Draw route polyline + "you are here" marker
     if (window._lastRouteCoords && window._lastRouteCoords.length) {
-      const poly = L.polyline(window._lastRouteCoords.map(c => [c[1], c[0]]), { color: '#2563eb', weight: 5, opacity: 0.85 }).addTo(navMap);
-      navMap.fitBounds(poly.getBounds(), { padding: [30, 30] });
+      const latlngs = window._lastRouteCoords.map(c => [c[1], c[0]]);
+      navRoutePoly = L.polyline(latlngs, { color: '#2563eb', weight: 6, opacity: 0.85 }).addTo(navMap);
+
+      // "You are here" pulse at route start
+      const start = latlngs[0];
+      L.circleMarker(start, { radius: 10, color: '#1e40af', fillColor: '#3b82f6', fillOpacity: 1, weight: 3 })
+        .bindPopup('<b>📍 You are here</b>')
+        .addTo(navMap);
+
+      navMap.fitBounds(navRoutePoly.getBounds(), { padding: [36, 36] });
     } else {
-      navMap.setView([destLat, destLng], 14);
+      navMap.setView([destLat, destLng], 13);
     }
-    setTimeout(() => navMap.invalidateSize(), 200);
+
+    setTimeout(() => navMap.invalidateSize(), 250);
   }, 600);
 }
 
