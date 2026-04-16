@@ -640,27 +640,13 @@
     .nav-map {
       flex: 1;
       min-height: 260px;
-      background: linear-gradient(180deg, #c9e8f0 0%, #b7d9e4 100%);
       position: relative;
       overflow: hidden;
     }
-    .road-h {
-      position: absolute; height: 8px;
-      background: rgba(255,255,255,.88);
-      border-radius: 4px;
-      left: 0; right: 0;
-    }
-    .road-v {
-      position: absolute; width: 8px;
-      background: rgba(255,255,255,.88);
-      border-radius: 4px;
-      top: 0; bottom: 0;
-    }
-    .route-overlay {
-      position: absolute;
-      background: var(--blue-mid);
-      border-radius: 5px;
-      opacity: .82;
+    #nav-leaflet-map {
+      width: 100%;
+      height: 100%;
+      min-height: 260px;
     }
     .map-label {
       position: absolute;
@@ -1368,20 +1354,7 @@
   ══════════════════════════════════════ -->
   <div id="s-nav" class="screen">
     <div class="nav-map">
-      <!-- Road grid -->
-      <div class="road-h" style="top:38%;opacity:.85;"></div>
-      <div class="road-h" style="top:62%;opacity:.60;height:6px;"></div>
-      <div class="road-v" style="left:28%;opacity:.60;width:6px;"></div>
-      <div class="road-v" style="left:61%;opacity:.85;"></div>
-      <!-- Route highlight -->
-      <div class="route-overlay" style="top:35%;left:24%;width:52%;height:12px;"></div>
-      <!-- Labels -->
-      <div class="map-label" style="top:26%;left:8%;">I-64 W</div>
-      <div class="map-label" style="top:52%;left:38%;">W Broad St</div>
-      <!-- You are here -->
-      <div class="you-dot" style="left:28%;top:37%;transform:translate(-50%,-50%);"></div>
-      <!-- Destination -->
-      <div class="dest-pin" style="left:63%;top:22%;">⚡</div>
+      <div id="nav-leaflet-map"></div>
     </div>
     <div class="nav-panel">
       <div class="nav-instruction">
@@ -2204,6 +2177,7 @@ async function planRoute() {
     document.getElementById('rp-time').textContent  = fmtDuration(route.durationS);
     document.getElementById('rp-stops').textContent = stopLabel;
 
+    window._lastRouteCoords = route.coords; // save for nav map
     drawRouteOnMap(route.coords, startPt, endPt, stops);
     renderRouteStops(startPt.label, endPt.label, battPct, distMi, stops, arrivalPct, !plan.reachable);
     renderCostCard(stops, distMi);
@@ -2239,10 +2213,36 @@ function openStopDetails() {
 /* ══════════════════════════════════════════════
    NAVIGATION
 ══════════════════════════════════════════════ */
+let navMap = null;
+
 function startNav() {
   if (!currentCharger) { toast('⚠️ No charger selected','warn'); return; }
   toast('🧭 Starting navigation…','info');
-  setTimeout(() => { go('s-nav'); toast('📍 Head toward ' + currentCharger.addr,'info'); }, 600);
+  setTimeout(() => {
+    go('s-nav');
+    toast('📍 Head toward ' + currentCharger.addr,'info');
+    // Init real Leaflet map for nav screen
+    const el = document.getElementById('nav-leaflet-map');
+    if (!el) return;
+    if (navMap) { navMap.remove(); navMap = null; }
+    el.style.height = (el.parentElement.offsetHeight || 280) + 'px';
+    const destLat = currentCharger.lat || 37.4316;
+    const destLng = currentCharger.lng || -78.6569;
+    navMap = L.map('nav-leaflet-map', { zoomControl: true, attributionControl: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(navMap);
+    // Charger marker
+    L.circleMarker([destLat, destLng], { radius: 12, color: '#d97706', fillColor: '#f59e0b', fillOpacity: 1, weight: 3 })
+      .bindPopup('<b>⚡ ' + currentCharger.name + '</b><br>' + currentCharger.addr)
+      .addTo(navMap).openPopup();
+    // Draw route polyline if available
+    if (window._lastRouteCoords && window._lastRouteCoords.length) {
+      const poly = L.polyline(window._lastRouteCoords.map(c => [c[1], c[0]]), { color: '#2563eb', weight: 5, opacity: 0.85 }).addTo(navMap);
+      navMap.fitBounds(poly.getBounds(), { padding: [30, 30] });
+    } else {
+      navMap.setView([destLat, destLng], 14);
+    }
+    setTimeout(() => navMap.invalidateSize(), 200);
+  }, 600);
 }
 
 function arrive() {
@@ -2476,7 +2476,9 @@ function openStationDetails(station) {
     net:   station.network,
     conn:  station.connectors.join(' / '),
     ports: buildPortsArray(station),
-    time:  station.charger_type === 'DC Fast' ? '~25 min' : '~4–6 hrs'
+    time:  station.charger_type === 'DC Fast' ? '~25 min' : '~4–6 hrs',
+    lat:   station.lat,
+    lng:   station.lng
   };
   detailSource = 'nearby';
 
@@ -2701,7 +2703,12 @@ function estimatedCost(st) {
 /* ── Sprint 4: Open compare screen ── */
 function openCompare() {
   go('s-compare');
-  renderCompareList();
+  if (stationsData && stationsData.length) {
+    renderCompareList();
+  } else {
+    document.getElementById('compare-list').innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:40px 0">Loading stations…</p>';
+    loadStations().then(() => renderCompareList());
+  }
 }
 
 /* ── Sprint 4: Render compare list ── */
