@@ -2298,8 +2298,9 @@ async function planRoute() {
     document.getElementById('rp-time').textContent  = fmtDuration(route.durationS);
     document.getElementById('rp-stops').textContent = stopLabel;
 
-    window._lastRouteCoords = route.coords; // save for nav map
-    window._lastRouteSteps  = route.steps || [];  // save for GPS directions
+    window._lastRouteCoords    = route.coords; // save for nav map
+    window._lastRouteSteps     = route.steps || [];  // save for GPS directions
+    window._lastRouteDestLabel = endPt.label;  // save for Leg 2 nav header
     window._lastRouteMeta = {
       distMi: route.distanceM / 1609.34,
       durationS: route.durationS,
@@ -2420,15 +2421,19 @@ function startNav() {
     go('s-nav');
     toast('📍 Head toward ' + currentCharger.name, 'info');
 
-    // Load GPS steps
-    navSteps = window._lastRouteSteps || [];
+    // Load Leg 1 GPS steps (start → charger)
+    // (leg1Steps computed below after splitIdx is found — re-filter here)
+    navSteps = (window._lastRouteSteps || []).filter(s => !s.way_points || s.way_points[0] <= (window._navSplitIdx || 9999));
+    if (!navSteps.length) navSteps = window._lastRouteSteps || [];
     navStepIdx = 0;
     if (navSteps.length) {
       renderNavStep();
+      document.getElementById('nav-step-counter').textContent =
+        'Leg 1 of 2 · Step 1 of ' + navSteps.length;
     } else {
       document.getElementById('nav-heading').textContent = '⚡ ' + currentCharger.name;
       document.getElementById('nav-subheading').textContent = currentCharger.addr;
-      document.getElementById('nav-step-counter').textContent = '';
+      document.getElementById('nav-step-counter').textContent = 'Leg 1 of 2 — To Charging Stop';
     }
 
     const el = document.getElementById('nav-leaflet-map');
@@ -2447,16 +2452,28 @@ function startNav() {
     const endLL   = coords.length ? [coords[coords.length-1][1], coords[coords.length-1][0]] : null;
 
     // Split route into Leg 1 (start→charger) and Leg 2 (charger→destination)
-    let leg1 = [], leg2 = [];
+    let leg1 = [], leg2 = [], splitIdx = coords.length - 1;
     if (coords.length) {
-      let closestIdx = coords.length - 1, minD = Infinity;
+      let minD = Infinity;
       for (let i = 0; i < coords.length; i++) {
         const d = Math.hypot(coords[i][1] - destLat, coords[i][0] - destLng);
-        if (d < minD) { minD = d; closestIdx = i; }
+        if (d < minD) { minD = d; splitIdx = i; }
       }
-      leg1 = coords.slice(0, closestIdx + 1).map(c => [c[1], c[0]]);
-      leg2 = coords.slice(closestIdx).map(c => [c[1], c[0]]);
+      leg1 = coords.slice(0, splitIdx + 1).map(c => [c[1], c[0]]);
+      leg2 = coords.slice(splitIdx).map(c => [c[1], c[0]]);
     }
+
+    window._navSplitIdx = splitIdx; // used by step filter above
+    // Save Leg 2 data for after charging
+    const allSteps = window._lastRouteSteps || [];
+    const leg1Steps = allSteps.filter(s => !s.way_points || s.way_points[0] <= splitIdx);
+    const leg2Steps = allSteps.filter(s => s.way_points && s.way_points[0] >= splitIdx);
+    window._navLeg2Steps  = leg2Steps;
+    window._navLeg2Coords = coords.slice(splitIdx);
+    window._navEndLL      = endLL;
+    window._navDestLabel  = window._lastRouteDestLabel || 'Your Destination';
+    window._navChargerLL  = [destLat, destLng];
+    window._navChargerName = currentCharger.name;
 
     // Leg 1: start → charger (solid blue)
     if (leg1.length > 1) {
@@ -2573,8 +2590,75 @@ function finishCharge() {
 }
 
 function continueTrip() {
-  toast('🚗 Safe travels! Remaining route loaded.','success');
-  setTimeout(() => go('s-success'), 700);
+  toast('🚗 Starting Leg 2 — navigating to your destination!', 'success');
+  setTimeout(() => startLeg2Nav(), 700);
+}
+
+function startLeg2Nav() {
+  go('s-nav');
+
+  // Load Leg 2 steps
+  navSteps = window._navLeg2Steps || [];
+  navStepIdx = 0;
+  if (navSteps.length) {
+    renderNavStep();
+    document.getElementById('nav-step-counter').textContent = 'Leg 2 of 2 · Step 1 of ' + navSteps.length;
+  } else {
+    document.getElementById('nav-heading').textContent = '🏁 ' + (window._navDestLabel || 'Your Destination');
+    document.getElementById('nav-subheading').textContent = 'Continue on your route';
+    document.getElementById('nav-step-counter').textContent = 'Leg 2 of 2 — To Destination';
+  }
+
+  const leg2Coords = window._navLeg2Coords || [];
+  const chargerLL  = window._navChargerLL;
+  const endLL      = window._navEndLL;
+
+  const el = document.getElementById('nav-leaflet-map');
+  if (!el) return;
+  if (navMap) { navMap.remove(); navMap = null; navRoutePoly = null; }
+  el.style.height = (el.parentElement.offsetHeight || 300) + 'px';
+
+  navMap = L.map('nav-leaflet-map', { zoomControl: true, attributionControl: false });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(navMap);
+
+  // Leg 2 polyline — solid blue
+  if (leg2Coords.length > 1) {
+    const latlngs = leg2Coords.map(c => [c[1], c[0]]);
+    navRoutePoly = L.polyline(latlngs, { color: '#2563eb', weight: 6, opacity: 0.95 }).addTo(navMap);
+  }
+
+  // Start of Leg 2 = charger (green dot)
+  if (chargerLL) {
+    L.circleMarker(chargerLL, { radius: 11, color: '#15803d', fillColor: '#22c55e', fillOpacity: 1, weight: 3 })
+      .bindPopup('<b>⚡ ' + (window._navChargerName || 'Charging Stop') + '</b><br><small>Charged & ready!</small>')
+      .addTo(navMap);
+  }
+
+  // Final destination — red flag pin
+  if (endLL) {
+    const destIcon = L.divIcon({
+      className: '',
+      html: '<div style="background:#dc2626;border:3px solid #991b1b;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.4);">🏁</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14]
+    });
+    L.marker(endLL, { icon: destIcon })
+      .bindPopup('<b>🏁 ' + (window._navDestLabel || 'Your Destination') + '</b>')
+      .addTo(navMap).openPopup();
+  }
+
+  if (navRoutePoly) {
+    navMap.fitBounds(navRoutePoly.getBounds(), { padding: [36, 36] });
+  } else if (endLL) {
+    navMap.setView(endLL, 12);
+  }
+
+  // Override "I've Arrived" to go to success screen on Leg 2
+  document.querySelector('#s-nav .btn-success').onclick = function() {
+    toast('🏁 You\'ve reached your destination!', 'success');
+    setTimeout(() => go('s-success'), 800);
+  };
+
+  setTimeout(() => navMap.invalidateSize(), 250);
 }
 
 function saveSession() {
