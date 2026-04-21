@@ -570,6 +570,33 @@
     }
     .savings-card .val-row { font-size: 15px; color: #166534; }
 
+    /* ── Stop option picker ── */
+    .stop-options-label {
+      font-size: 12px; font-weight: 700; letter-spacing: .06em;
+      color: var(--gray-500); text-transform: uppercase; margin: 14px 0 8px;
+    }
+    .stop-option-card {
+      background: var(--white);
+      border: 2px solid var(--gray-200);
+      border-radius: var(--r-md);
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: border-color .18s, box-shadow .18s;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .stop-option-card:hover  { border-color: var(--blue-light); box-shadow: var(--shadow-xs); }
+    .stop-option-card.selected { border-color: var(--blue-mid); background: var(--blue-pale); }
+    .stop-option-card.recommended { border-color: var(--green); }
+    .soc-name  { font-size: 15px; font-weight: 700; color: var(--gray-900); }
+    .soc-meta  { font-size: 13px; color: var(--gray-500); margin-top: 2px; }
+    .soc-price { font-size: 18px; font-weight: 800; color: var(--blue-mid); text-align: right; white-space: nowrap; }
+    .soc-price.free { color: var(--green); }
+    .soc-badge { font-size: 11px; font-weight: 700; background: var(--green); color: #fff; border-radius: 20px; padding: 2px 8px; margin-top: 4px; display: inline-block; }
+
     /* ════════════════════════════════════════
        SCREEN 8 – CHARGER DETAIL
     ════════════════════════════════════════ */
@@ -1292,6 +1319,7 @@
       <div id="route-map" style="height:190px;border-radius:12px;margin-bottom:14px;overflow:hidden;flex-shrink:0;"></div>
       <div class="section-label">Route Overview</div>
       <div id="rp-stop-list"></div>
+      <div id="rp-stop-options"></div>
       <hr class="divider" />
       <div id="rp-cost-card"></div>
       <div id="rp-action-btns">
@@ -2083,6 +2111,89 @@ function renderRouteStops(startLabel, endLabel, battPct, routeDistMi, stops, arr
   document.getElementById('rp-stop-list').innerHTML = html;
 }
 
+/* ── Render 4+ selectable charger stop options along route ── */
+function renderStopOptions(compatible, cumDistM, coords, evProfile, battPct, pref) {
+  const el = document.getElementById('rp-stop-options');
+  if (!el) return;
+  if (!compatible || compatible.length === 0) { el.innerHTML = ''; return; }
+
+  // Score and sort all candidates (same logic as planner)
+  const totalRangeM = evProfile.range * 1609.34;
+  const usableM = totalRangeM * (battPct / 100) - totalRangeM * 0.15;
+  const enriched = compatible.map(s => {
+    const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
+    let minDist = Infinity, closestCum = 0;
+    for (let i = 0; i < coords.length - 1; i++) {
+      const d = pointToSegmentM(sLat, sLng, coords[i][1], coords[i][0], coords[i+1][1], coords[i+1][0]);
+      if (d < minDist) { minDist = d; closestCum = (cumDistM[i] + cumDistM[i+1]) / 2; }
+    }
+    let score = minDist * 0.5;
+    if (pref === 'fast'    && s.charger_type !== 'DC Fast') score += 80000;
+    if (pref === 'cheap')  score += (parseFloat(s.pricing) || 0.36) * 120000;
+    if (pref === 'balanced') {
+      score += (parseFloat(s.pricing) || 0.36) * 25000;
+      if (s.charger_type !== 'DC Fast') score += 12000;
+    }
+    return { station: s, routeDistM: closestCum, offRouteM: minDist, score };
+  })
+  .filter(e => e.routeDistM <= usableM || usableM <= 0) // within reachable range
+  .sort((a, b) => a.score - b.score)
+  .slice(0, 8); // show up to 8
+
+  if (!enriched.length) { el.innerHTML = ''; return; }
+
+  let html = '<div class="stop-options-label">⚡ Available Charging Stops Along Route</div>';
+  enriched.forEach((e, i) => {
+    const s = e.station;
+    const isFree = s.is_free || s.pricing === null || (s.pricing_display || '').toLowerCase().includes('free');
+    const priceStr = isFree ? 'FREE' : (s.pricing_per_kwh != null ? '$' + parseFloat(s.pricing_per_kwh).toFixed(2) + '/kWh' : s.pricing_display || 'Variable');
+    const offMi = (e.offRouteM / 1609.34).toFixed(1);
+    const isRecommended = i === 0;
+    html += `
+      <div class="stop-option-card${isRecommended ? ' recommended selected' : ''}" id="soc-${i}" onclick="selectStopOption(${i})" data-idx="${i}">
+        <div style="flex:1;min-width:0;">
+          <div class="soc-name">${s.name}</div>
+          <div class="soc-meta">${s.city}, ${s.state} · ${s.charger_type} · ${offMi} mi off route</div>
+          ${isRecommended ? '<span class="soc-badge">⭐ Recommended</span>' : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div class="soc-price${isFree ? ' free' : ''}">${priceStr}</div>
+          <div style="font-size:11px;color:var(--gray-400);">${(s.connectors||[]).join(' · ')}</div>
+        </div>
+      </div>`;
+  });
+
+  el.innerHTML = html;
+  // Store candidates for selection
+  window._stopCandidates = enriched;
+  // Default: select first (recommended)
+  if (enriched.length) selectStopOption(0, true);
+}
+
+/* ── User taps a stop option card to select it ── */
+function selectStopOption(idx, silent) {
+  const candidates = window._stopCandidates;
+  if (!candidates || !candidates[idx]) return;
+  // Update card highlight
+  candidates.forEach((_, i) => {
+    const card = document.getElementById('soc-' + i);
+    if (card) card.classList.toggle('selected', i === idx);
+  });
+  // Update the route stop data used by "View Details" button
+  const chosen = candidates[idx].station;
+  routeStopData = chosen;
+  // Update action button visibility
+  const btnsEl = document.getElementById('rp-action-btns');
+  if (btnsEl) {
+    const existing = btnsEl.querySelector('.btn-primary');
+    if (!existing) {
+      btnsEl.insertAdjacentHTML('afterbegin',
+        `<button class="btn btn-primary" onclick="openStopDetails()" style="margin-bottom:12px;">⚡ View Charging Stop Details</button>`);
+    }
+  }
+  if (!silent) toast('📍 ' + chosen.name + ' selected as your stop', 'info');
+}
+
 /* ── Build cost estimate card (sums all stops) ── */
 function renderCostCard(stops, routeDistMi) {
   let elecCost = 0;
@@ -2149,8 +2260,8 @@ async function planRoute() {
     if (u && u.range && parseInt(u.range) > 0) evProfile.range = parseInt(u.range);
     const cumDistM  = buildCumDist(route.coords);
 
-    // Stations within 1 mile of route, connector-compatible, not unavailable
-    const nearbyStations = stationsAlongRoute(route.coords, 1609);
+    // Stations within 5 miles of route, connector-compatible, not unavailable
+    const nearbyStations = stationsAlongRoute(route.coords, 8046);
     const compatible = nearbyStations.filter(s =>
       Array.isArray(s.connectors) &&
       s.connectors.some(c => evProfile.connectors.includes(c)) &&
@@ -2191,6 +2302,7 @@ async function planRoute() {
     };
     drawRouteOnMap(route.coords, startPt, endPt, stops);
     renderRouteStops(startPt.label, endPt.label, battPct, distMi, stops, arrivalPct, !plan.reachable);
+    renderStopOptions(compatible, cumDistM, route.coords, evProfile, battPct, pref);
     renderCostCard(stops, distMi);
 
     let btnsHTML = '';
