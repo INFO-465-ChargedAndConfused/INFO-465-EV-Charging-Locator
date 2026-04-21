@@ -2444,41 +2444,59 @@ function startNav() {
 
     const coords = window._lastRouteCoords || [];
     const startLL = coords.length ? [coords[0][1], coords[0][0]] : null;
+    const endLL   = coords.length ? [coords[coords.length-1][1], coords[coords.length-1][0]] : null;
 
-    // Draw route polyline trimmed to just start → charger stop
+    // Split route into Leg 1 (start→charger) and Leg 2 (charger→destination)
+    let leg1 = [], leg2 = [];
     if (coords.length) {
-      // Find polyline index closest to the charger
       let closestIdx = coords.length - 1, minD = Infinity;
       for (let i = 0; i < coords.length; i++) {
         const d = Math.hypot(coords[i][1] - destLat, coords[i][0] - destLng);
         if (d < minD) { minD = d; closestIdx = i; }
       }
-      const segment = coords.slice(0, closestIdx + 1).map(c => [c[1], c[0]]);
-      if (segment.length > 1) {
-        navRoutePoly = L.polyline(segment, { color: '#2563eb', weight: 6, opacity: 0.9 }).addTo(navMap);
-      }
+      leg1 = coords.slice(0, closestIdx + 1).map(c => [c[1], c[0]]);
+      leg2 = coords.slice(closestIdx).map(c => [c[1], c[0]]);
     }
 
-    // "You are here" marker — green circle at route start
+    // Leg 1: start → charger (solid blue)
+    if (leg1.length > 1) {
+      navRoutePoly = L.polyline(leg1, { color: '#2563eb', weight: 6, opacity: 0.95 }).addTo(navMap);
+    }
+    // Leg 2: charger → destination (dashed gray — to be driven after charging)
+    if (leg2.length > 1) {
+      L.polyline(leg2, { color: '#94a3b8', weight: 5, opacity: 0.6, dashArray: '8 8' }).addTo(navMap);
+    }
+
+    // "You are here" — green dot at route start
     if (startLL) {
       L.circleMarker(startLL, { radius: 11, color: '#15803d', fillColor: '#22c55e', fillOpacity: 1, weight: 3 })
-        .bindPopup('<b>📍 Your Location</b>')
-        .addTo(navMap);
+        .bindPopup('<b>📍 Your Location</b>').addTo(navMap);
     }
 
-    // Charging stop marker — bold orange pin at destination
+    // Charging stop — bold ⚡ icon
     const chargerIcon = L.divIcon({
       className: '',
-      html: '<div style="background:#f59e0b;border:3px solid #b45309;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,.35);">⚡</div>',
-      iconSize: [28, 28], iconAnchor: [14, 14]
+      html: '<div style="background:#f59e0b;border:3px solid #b45309;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 8px rgba(0,0,0,.4);">⚡</div>',
+      iconSize: [30, 30], iconAnchor: [15, 15]
     });
     L.marker([destLat, destLng], { icon: chargerIcon })
       .bindPopup('<b>⚡ ' + currentCharger.name + '</b><br><small>' + currentCharger.addr + '</small>')
       .addTo(navMap).openPopup();
 
-    // Fit map to show start → stop segment
-    if (navRoutePoly) {
-      navMap.fitBounds(navRoutePoly.getBounds(), { padding: [40, 40] });
+    // Final destination — red pin
+    if (endLL && (Math.abs(endLL[0]-destLat) > 0.01 || Math.abs(endLL[1]-destLng) > 0.01)) {
+      const destIcon = L.divIcon({
+        className: '',
+        html: '<div style="background:#dc2626;border:3px solid #991b1b;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 2px 6px rgba(0,0,0,.35);">🏁</div>',
+        iconSize: [24, 24], iconAnchor: [12, 12]
+      });
+      L.marker(endLL, { icon: destIcon }).bindPopup('<b>🏁 Your Destination</b>').addTo(navMap);
+    }
+
+    // Fit to full route so user can see the whole journey
+    const allPoints = [...(leg1.length ? leg1 : []), ...(leg2.length ? leg2 : [])];
+    if (allPoints.length > 1) {
+      navMap.fitBounds(L.latLngBounds(allPoints), { padding: [36, 36] });
     } else {
       navMap.setView([destLat, destLng], 13);
     }
