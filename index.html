@@ -718,10 +718,15 @@
     .nav-icon { font-size: 30px; flex-shrink: 0; }
     .nav-main { font-size: 17px; font-weight: 700; color: var(--white); }
     .nav-sub  { font-size: 14px; color: rgba(255,255,255,.80); margin-top: 2px; }
-    .nav-stats-row { display: flex; justify-content: space-around; margin-bottom: 14px; }
-    .nav-stat { text-align: center; }
-    .nav-stat .val { font-size: 21px; font-weight: 700; color: var(--gray-900); }
-    .nav-stat .lbl { font-size: 12px; color: var(--gray-500); }
+    .nav-stats-row {
+      display: flex; justify-content: space-around;
+      background: var(--gray-100); border-radius: var(--r-md);
+      padding: 10px 4px; margin-bottom: 12px;
+    }
+    .nav-stat { text-align: center; flex: 1; }
+    .nav-stat .val { font-size: 20px; font-weight: 800; color: var(--gray-900); }
+    .nav-stat .lbl { font-size: 11px; color: var(--gray-500); margin-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
+    .nav-stat + .nav-stat { border-left: 1px solid var(--gray-200); }
     .nav-actions { display: flex; gap: 10px; }
 
     /* ════════════════════════════════════════
@@ -2298,7 +2303,7 @@ async function planRoute() {
     window._lastRouteMeta = {
       distMi: route.distanceM / 1609.34,
       durationS: route.durationS,
-      arrivalBatt: plan.stops.length ? plan.stops[0].arrivalPct : plan.finalBatt
+      arrivalBatt: arrivalPct  // already calculated above
     };
     drawRouteOnMap(route.coords, startPt, endPt, stops);
     renderRouteStops(startPt.label, endPt.label, battPct, distMi, stops, arrivalPct, !plan.reachable);
@@ -2431,29 +2436,49 @@ function startNav() {
     if (navMap) { navMap.remove(); navMap = null; navRoutePoly = null; }
     el.style.height = (el.parentElement.offsetHeight || 300) + 'px';
 
-    const destLat = currentCharger.lat || 37.4316;
-    const destLng = currentCharger.lng || -78.6569;
+    const destLat = parseFloat(currentCharger.lat) || 37.4316;
+    const destLng = parseFloat(currentCharger.lng) || -78.6569;
 
     navMap = L.map('nav-leaflet-map', { zoomControl: true, attributionControl: false });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(navMap);
 
-    // Charger destination marker (orange)
-    L.circleMarker([destLat, destLng], { radius: 13, color: '#b45309', fillColor: '#f59e0b', fillOpacity: 1, weight: 3 })
+    const coords = window._lastRouteCoords || [];
+    const startLL = coords.length ? [coords[0][1], coords[0][0]] : null;
+
+    // Draw route polyline trimmed to just start → charger stop
+    if (coords.length) {
+      // Find polyline index closest to the charger
+      let closestIdx = coords.length - 1, minD = Infinity;
+      for (let i = 0; i < coords.length; i++) {
+        const d = Math.hypot(coords[i][1] - destLat, coords[i][0] - destLng);
+        if (d < minD) { minD = d; closestIdx = i; }
+      }
+      const segment = coords.slice(0, closestIdx + 1).map(c => [c[1], c[0]]);
+      if (segment.length > 1) {
+        navRoutePoly = L.polyline(segment, { color: '#2563eb', weight: 6, opacity: 0.9 }).addTo(navMap);
+      }
+    }
+
+    // "You are here" marker — green circle at route start
+    if (startLL) {
+      L.circleMarker(startLL, { radius: 11, color: '#15803d', fillColor: '#22c55e', fillOpacity: 1, weight: 3 })
+        .bindPopup('<b>📍 Your Location</b>')
+        .addTo(navMap);
+    }
+
+    // Charging stop marker — bold orange pin at destination
+    const chargerIcon = L.divIcon({
+      className: '',
+      html: '<div style="background:#f59e0b;border:3px solid #b45309;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 6px rgba(0,0,0,.35);">⚡</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14]
+    });
+    L.marker([destLat, destLng], { icon: chargerIcon })
       .bindPopup('<b>⚡ ' + currentCharger.name + '</b><br><small>' + currentCharger.addr + '</small>')
       .addTo(navMap).openPopup();
 
-    // Draw route polyline + "you are here" marker
-    if (window._lastRouteCoords && window._lastRouteCoords.length) {
-      const latlngs = window._lastRouteCoords.map(c => [c[1], c[0]]);
-      navRoutePoly = L.polyline(latlngs, { color: '#2563eb', weight: 6, opacity: 0.85 }).addTo(navMap);
-
-      // "You are here" pulse at route start
-      const start = latlngs[0];
-      L.circleMarker(start, { radius: 10, color: '#1e40af', fillColor: '#3b82f6', fillOpacity: 1, weight: 3 })
-        .bindPopup('<b>📍 You are here</b>')
-        .addTo(navMap);
-
-      navMap.fitBounds(navRoutePoly.getBounds(), { padding: [36, 36] });
+    // Fit map to show start → stop segment
+    if (navRoutePoly) {
+      navMap.fitBounds(navRoutePoly.getBounds(), { padding: [40, 40] });
     } else {
       navMap.setView([destLat, destLng], 13);
     }
