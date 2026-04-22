@@ -570,6 +570,27 @@
     }
     .savings-card .val-row { font-size: 15px; color: #166534; }
 
+    /* ── Saved route cards ── */
+    .saved-route-card {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      border-radius: var(--r-md);
+      padding: 13px 14px;
+      margin-bottom: 9px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color .18s, box-shadow .18s;
+    }
+    .saved-route-card:hover { border-color: var(--blue-light); box-shadow: var(--shadow-xs); }
+    .saved-route-icon { font-size: 22px; flex-shrink: 0; }
+    .saved-route-info { flex: 1; min-width: 0; }
+    .saved-route-name { font-size: 15px; font-weight: 700; color: var(--gray-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .saved-route-meta { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+    .saved-route-del  { font-size: 18px; color: var(--gray-400); padding: 4px 6px; flex-shrink: 0; }
+    .saved-route-del:hover { color: var(--red); }
+
     /* ── Stop option picker ── */
     .stop-options-label {
       font-size: 12px; font-weight: 700; letter-spacing: .06em;
@@ -1212,10 +1233,12 @@
         <div class="action-arrow">›</div>
       </div>
 
-      <div class="section-label" style="margin-top:22px;">Recent Activity</div>
-      <div class="card" style="display:flex;gap:12px;align-items:center;color:var(--gray-500);font-size:15px;">
-        <span style="font-size:26px;">📋</span>
-        <span>No recent trips yet. Start exploring!</span>
+      <div class="section-label" style="margin-top:22px;">Saved Routes</div>
+      <div id="h-saved-routes">
+        <div class="card" style="display:flex;gap:12px;align-items:center;color:var(--gray-500);font-size:15px;">
+          <span style="font-size:26px;">📋</span>
+          <span>No saved routes yet. Plan a trip and save it!</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1328,6 +1351,7 @@
       <hr class="divider" />
       <div id="rp-cost-card"></div>
       <div id="rp-action-btns">
+        <button class="btn btn-ghost" onclick="saveCurrentRoute()" style="margin-bottom:10px;">💾 Save This Route</button>
         <button class="btn btn-secondary" onclick="go('s-route')">← Modify Route</button>
       </div>
       <div style="height:16px;"></div>
@@ -1367,7 +1391,7 @@
 
       <div class="cost-section">
         <div class="avail-title">💰 Cost Estimate for Your Vehicle</div>
-        <div class="cost-row"><span class="key">Charge 0% → 80%</span><span class="val" id="d-cost80">~$21.60</span></div>
+        <div class="cost-row"><span class="key">Charge 0% → 90%</span><span class="val" id="d-cost80">~$21.60</span></div>
         <div class="cost-row"><span class="key">Est. time (DC Fast)</span><span class="val" id="d-time">~25 min</span></div>
         <div class="cost-row"><span class="key">Network</span><span class="val" id="d-net">Electrify America</span></div>
         <div class="cost-row"><span class="key">Connector</span><span class="val" id="d-conn">CCS / CHAdeMO</span></div>
@@ -1789,7 +1813,7 @@ function viewCharger(id, source) {
   else                               { b.classList.add('badge-no');  b.textContent = '○ Unavailable'; }
 
   // Cost estimate (assumes 60 kWh battery)
-  const cost80 = c.free ? 'FREE' : '~$' + (60 * 0.8 * c.price).toFixed(2);
+  const cost80 = c.free ? 'FREE' : '~$' + (60 * 0.9 * c.price).toFixed(2);
   document.getElementById('d-cost80').textContent = cost80;
 
   // Ports
@@ -1956,7 +1980,8 @@ function stationsAlongRoute(coords, maxDistM) {
 ══════════════════════════════════════════════ */
 function planMultiStopRoute(evRangeMi, battPct, routeDistMi, nearbyStations, cumDistM, coords, preference) {
   const totalRangeM  = evRangeMi * 1609.34;
-  const safeReserveM = totalRangeM * 0.15; // keep ≥15% reserve
+  const safeReserveM = totalRangeM * 0.15; // keep ≥15% reserve at destination
+  const stopEarlyM   = totalRangeM * 0.30; // stop when 30% left to ensure 2-3 stops on longer trips
   const routeDistM   = routeDistMi * 1609.34;
 
   // Pre-compute each station's closest position along the route
@@ -1978,11 +2003,14 @@ function planMultiStopRoute(evRangeMi, battPct, routeDistMi, nearbyStations, cum
     const remainM  = routeDistM - posM;
     const usableM  = chargeM - safeReserveM;
 
-    if (usableM >= remainM) break; // can reach destination from here
+    if (usableM >= remainM) break; // can reach destination with ≥15% reserve
 
-    // Find reachable candidates ahead of current position
+    // Use stopEarlyM threshold to encourage 2-3 stops on longer trips
+    const triggerM = Math.max(safeReserveM, Math.min(stopEarlyM, chargeM * 0.45));
+
+    // Find reachable candidates ahead of current position (stop before running low)
     const reachable = enriched.filter(s =>
-      s.routeDistM > posM && (s.routeDistM - posM) <= usableM
+      s.routeDistM > posM && (s.routeDistM - posM) <= (chargeM - triggerM)
     );
 
     if (!reachable.length) return { stops, reachable: false };
@@ -2004,7 +2032,7 @@ function planMultiStopRoute(evRangeMi, battPct, routeDistMi, nearbyStations, cum
     if (!best) return { stops, reachable: false };
     stops.push(best);
     posM    = best.routeDistM;
-    chargeM = totalRangeM * 0.80; // charged to 80% at this stop
+    chargeM = totalRangeM * 0.90; // charged to 90% at this stop (battery health max)
     if (stops.length > 10) break;  // safety cap
   }
 
@@ -2082,11 +2110,11 @@ function renderRouteStops(startLabel, endLabel, battPct, routeDistMi, stops, arr
     stops.forEach((sr, idx) => {
       const s = sr.station;
       const chargeMins = s.charger_type === 'DC Fast' ? 28 : 90;
-      const prevBatt   = idx === 0 ? battPct : 80;
+      const prevBatt   = idx === 0 ? battPct : 90;
       const prevDistM  = idx === 0 ? 0 : stops[idx - 1].routeDistM;
       const segDistMi  = (sr.routeDistM - prevDistM) / 1609.34;
       const arrAtStop  = Math.max(10, Math.round(prevBatt - (segDistMi / evProfile.range * 100)));
-      const kwhAdded   = ((80 - arrAtStop) / 100 * 60).toFixed(1);
+      const kwhAdded   = ((90 - arrAtStop) / 100 * 60).toFixed(1);
       const isFree     = sr.station.pricing === null || (sr.station.pricing_display || '').toLowerCase().includes('free');
       const stopCost   = isFree ? 'FREE' : '~$' + (parseFloat(kwhAdded) * (parseFloat(sr.station.pricing) || 0.36)).toFixed(2);
       const stopLabel  = stops.length > 1 ? `⚡ Charging Stop ${idx + 1}` : '⚡ Charging Stop';
@@ -2101,7 +2129,7 @@ function renderRouteStops(startLabel, endLabel, battPct, routeDistMi, stops, arr
               <span>🕒 ~${chargeMins} min charge</span>
               <span>💰 ${stopCost}</span>
             </div>
-            <div class="charge-info-sub">Arriving at ~${arrAtStop}% → Charge to 80%</div>
+            <div class="charge-info-sub">Arriving at ~${arrAtStop}% → Charge to 90%</div>
           </div>
         </div>
       </div>`;
@@ -2282,7 +2310,7 @@ async function planRoute() {
     let arrivalPct;
     if (stops.length > 0) {
       const last = stops[stops.length - 1];
-      arrivalPct = Math.round(80 - ((distMi - last.routeDistM / 1609.34) / evProfile.range * 100));
+      arrivalPct = Math.round(90 - ((distMi - last.routeDistM / 1609.34) / evProfile.range * 100));
     } else {
       arrivalPct = Math.round(battPct - (distMi / evProfile.range * 100));
     }
@@ -2538,7 +2566,7 @@ function resetCharging() {
 }
 
 function updateChargingUI() {
-  const target = 80;
+  const target = 90;
   const prog   = Math.max(0, ((chargePct - 35) / (target - 35)) * 100);
 
   document.getElementById('ch-fill').style.width  = chargePct + '%';
@@ -2568,24 +2596,24 @@ function updateChargingUI() {
 function startChargeSim() {
   if (chargeTimer) clearInterval(chargeTimer);
   chargeTimer = setInterval(() => {
-    if (chargePct < 80) { chargePct++; updateChargingUI(); }
+    if (chargePct < 90) { chargePct++; updateChargingUI(); }
     else { clearInterval(chargeTimer); chargeTimer = null; }
   }, 400);
 }
 
 function finishCharge() {
   if (chargeTimer) { clearInterval(chargeTimer); chargeTimer = null; }
-  chargePct = 80;
+  chargePct = 90;
   updateChargingUI();
 
   // Update final cost on complete screen
   if (currentCharger && !currentCharger.free) {
-    const kwh  = (80 - 35) * 0.6;
+    const kwh  = (90 - 35) * 0.6;
     const cost = (kwh * currentCharger.price).toFixed(2);
     document.getElementById('final-cost').textContent = '$' + cost;
   }
 
-  toast('🎉 Charging complete! 80% reached','success');
+  toast('🎉 Charging complete! 90% reached — battery-healthy stop!','success');
   setTimeout(() => go('s-complete'), 900);
 }
 
@@ -3091,6 +3119,90 @@ function renderCompareList() {
         </div>
       </div>`;
   }).join('');
+}
+
+/* ══════════════════════════════════════════════
+   SAVED ROUTES
+══════════════════════════════════════════════ */
+function getSavedRoutesKey() {
+  const u = getUser();
+  return 'rr_routes_' + ((u && u.name) ? u.name.toLowerCase().replace(/\s+/g,'_') : 'guest');
+}
+
+function saveCurrentRoute() {
+  const start = (document.getElementById('r-start') || {}).value || '';
+  const end   = (document.getElementById('r-end')   || {}).value || '';
+  if (!start || !end) { toast('⚠️ No route to save yet — plan a route first.', 'warn'); return; }
+
+  const key    = getSavedRoutesKey();
+  const routes = JSON.parse(localStorage.getItem(key) || '[]');
+
+  const stops  = (window._stopCandidates || []).slice(0,3).map(e => e.station.name);
+  const meta   = window._lastRouteMeta || {};
+  const newRoute = {
+    id:      Date.now(),
+    start,
+    end,
+    date:    new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }),
+    distMi:  meta.distMi ? Math.round(meta.distMi) : null,
+    stops,
+    pref:    (document.getElementById('r-pref') || {}).value || 'any',
+    batt:    parseInt((document.getElementById('r-batt') || {}).value || 75)
+  };
+
+  // Prevent duplicate (same start+end)
+  const isDupe = routes.some(r => r.start === start && r.end === end);
+  if (isDupe) { toast('📋 Route already saved!', 'info'); return; }
+
+  routes.unshift(newRoute);
+  if (routes.length > 10) routes.pop(); // keep last 10
+  localStorage.setItem(key, JSON.stringify(routes));
+
+  toast('💾 Route saved for ' + ((getUser() || {}).name || 'you') + '!', 'success');
+  renderSavedRoutes();
+}
+
+function deleteSavedRoute(id) {
+  const key    = getSavedRoutesKey();
+  const routes = JSON.parse(localStorage.getItem(key) || '[]').filter(r => r.id !== id);
+  localStorage.setItem(key, JSON.stringify(routes));
+  renderSavedRoutes();
+  toast('🗑️ Route removed.', 'info');
+}
+
+function loadSavedRoute(route) {
+  const startEl = document.getElementById('r-start');
+  const endEl   = document.getElementById('r-end');
+  const prefEl  = document.getElementById('r-pref');
+  const battEl  = document.getElementById('r-batt');
+  if (startEl) startEl.value = route.start;
+  if (endEl)   endEl.value   = route.end;
+  if (prefEl)  prefEl.value  = route.pref || 'any';
+  if (battEl)  battEl.value  = route.batt || 75;
+  go('s-route');
+  toast('📍 Route loaded — tap Plan Route to go!', 'info');
+}
+
+function renderSavedRoutes() {
+  const el = document.getElementById('h-saved-routes');
+  if (!el) return;
+  const key    = getSavedRoutesKey();
+  const routes = JSON.parse(localStorage.getItem(key) || '[]');
+
+  if (!routes.length) {
+    el.innerHTML = '<div class="card" style="display:flex;gap:12px;align-items:center;color:var(--gray-500);font-size:15px;"><span style="font-size:26px;">📋</span><span>No saved routes yet. Plan a trip and save it!</span></div>';
+    return;
+  }
+
+  el.innerHTML = routes.map(r => `
+    <div class="saved-route-card" onclick="loadSavedRoute(${JSON.stringify(r).replace(/"/g,'&quot;')})">
+      <div class="saved-route-icon">🗺️</div>
+      <div class="saved-route-info">
+        <div class="saved-route-name">${r.start} → ${r.end}</div>
+        <div class="saved-route-meta">${r.date}${r.distMi ? ' · ' + r.distMi + ' mi' : ''}${r.stops && r.stops.length ? ' · ' + r.stops.length + ' stop' + (r.stops.length > 1 ? 's' : '') : ''}</div>
+      </div>
+      <button class="saved-route-del" onclick="event.stopPropagation();deleteSavedRoute(${r.id})">🗑</button>
+    </div>`).join('');
 }
 
 /* ══════════════════════════════════════════════
