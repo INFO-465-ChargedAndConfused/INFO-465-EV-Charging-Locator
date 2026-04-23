@@ -2331,6 +2331,8 @@ async function planRoute() {
     window._lastRouteCoords    = route.coords; // save for nav map
     window._lastRouteSteps     = route.steps || [];  // save for GPS directions
     window._lastRouteDestLabel = endPt.label;  // save for Leg 2 nav header
+    window._lastRouteStart     = startVal;     // save for route bookmarking
+    window._lastRouteEnd       = endVal;       // save for route bookmarking
     window._lastRouteMeta = {
       distMi: route.distanceM / 1609.34,
       durationS: route.durationS,
@@ -3132,8 +3134,8 @@ function getSavedRoutesKey() {
 }
 
 function saveCurrentRoute() {
-  const start = (document.getElementById('r-start') || {}).value || '';
-  const end   = (document.getElementById('r-end')   || {}).value || '';
+  const start = window._lastRouteStart || (document.getElementById('r-start') || {}).value || '';
+  const end   = window._lastRouteEnd   || (document.getElementById('r-end')   || {}).value || '';
   if (!start || !end) { toast('⚠️ No route to save yet — plan a route first.', 'warn'); return; }
 
   const key    = getSavedRoutesKey();
