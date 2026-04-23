@@ -1711,6 +1711,8 @@ function applyUser(u) {
   if (u.name)  document.getElementById('h-name').textContent  = u.name;
   if (u.ev)    document.getElementById('h-car').textContent   = u.ev;
   if (u.range) document.getElementById('h-range').textContent = u.range;
+  // Reload saved routes under this user's key every time profile is applied
+  renderSavedRoutes();
 }
 
 function saveProfile() {
@@ -3222,6 +3224,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (u.ev)    document.getElementById('p-ev').value    = u.ev;
     if (u.loc)   document.getElementById('p-loc').value   = u.loc;
     if (u.range) document.getElementById('p-range').value = u.range;
+    // Render saved routes on page load for returning users
+    renderSavedRoutes();
   }
 });
 </script>
