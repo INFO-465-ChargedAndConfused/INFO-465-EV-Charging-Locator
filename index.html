@@ -2184,11 +2184,18 @@ function renderStopOptions(compatible, cumDistM, coords, evProfile, battPct, pre
     const priceStr = isFree ? 'FREE' : (s.pricing_per_kwh != null ? '$' + parseFloat(s.pricing_per_kwh).toFixed(2) + '/kWh' : s.pricing_display || 'Variable');
     const offMi = (e.offRouteM / 1609.34).toFixed(1);
     const isRecommended = i === 0;
+    // Calculate predicted battery % on arrival at this charger
+    const distToStopMi = e.routeDistM / 1609.34;
+    const arrBatt = Math.max(5, Math.round(battPct - (distToStopMi / evProfile.range * 100)));
+    const battColor = arrBatt <= 20 ? '#ef4444' : arrBatt <= 40 ? '#f59e0b' : '#22c55e';
     html += `
       <div class="stop-option-card${isRecommended ? ' recommended selected' : ''}" id="soc-${i}" onclick="selectStopOption(${i})" data-idx="${i}">
         <div style="flex:1;min-width:0;">
           <div class="soc-name">${s.name}</div>
           <div class="soc-meta">${s.city}, ${s.state} · ${s.charger_type} · ${offMi} mi off route</div>
+          <div style="font-size:12px;margin-top:4px;">
+            🔋 Arrive at <strong style="color:${battColor};">${arrBatt}%</strong> → charge to 90%
+          </div>
           ${isRecommended ? '<span class="soc-badge">⭐ Recommended</span>' : ''}
         </div>
         <div style="text-align:right;flex-shrink:0;">
