@@ -3098,16 +3098,20 @@ function openCompare() {
 function renderCompareList() {
   const el = document.getElementById('compare-list');
   if (!el) return;
-  // Sort all available stations by estimated cost
-  const sorted = [...stationsData]
-    .filter(s => s.status !== 'unavailable')
-    .sort((a, b) => estimatedCost(a) - estimatedCost(b))
-    .slice(0, 8); // show top 8
+
+  const available = [...stationsData].filter(s => s.status !== 'unavailable');
+
+  // Split into paid (sorted cheapest first) and free (always at bottom)
+  const paid = available
+    .filter(s => !s.is_free)
+    .sort((a, b) => estimatedCost(a) - estimatedCost(b));
+  const free = available.filter(s => s.is_free);
+  const sorted = [...paid, ...free];
 
   if (!sorted.length) { el.innerHTML = '<p style="color:var(--gray-500);text-align:center;padding:40px 0">No stations found.</p>'; return; }
 
-  el.innerHTML = sorted.map((st, i) => {
-    const isCheapest = i === 0;
+  const cardHtml = (st, i) => {
+    const isCheapest = i === 0 && !st.is_free; // cheapest among paid
     const cost = estimatedCost(st);
     const costStr = st.is_free ? 'FREE' : cost === Infinity ? 'Variable' : `~$${cost.toFixed(2)}`;
     const costClass = st.is_free ? 'free' : '';
@@ -3129,15 +3133,19 @@ function renderCompareList() {
           <span style="font-size:13px;color:var(--gray-500);">${connectors}</span>
         </div>
       </div>`;
-  }).join('');
+  };
+
+  let html = '';
+  if (paid.length) html += `<div class="stop-options-label" style="margin-bottom:8px;">💳 Paid Stations — Sorted by Price</div>` + paid.map(cardHtml).join('');
+  if (free.length) html += `<div class="stop-options-label" style="margin:16px 0 8px;">🆓 Free Stations</div>` + free.map((st, i) => cardHtml(st, paid.length + i)).join('');
+  el.innerHTML = html;
 }
 
 /* ══════════════════════════════════════════════
    SAVED ROUTES
 ══════════════════════════════════════════════ */
 function getSavedRoutesKey() {
-  const u = getUser();
-  return 'rr_routes_' + ((u && u.name) ? u.name.toLowerCase().replace(/\s+/g,'_') : 'guest');
+  return 'rr_routes';
 }
 
 function saveCurrentRoute() {
